@@ -1,0 +1,41 @@
+{
+  "name": "@polyflow/sdk",
+  "version": "1.0.4",
+  "description": "Polyflow SDK",
+  "main": "dist/browser/index.js",
+  "type": "module",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint . --ext .ts",
+    "lint-and-fix": "eslint . --ext .ts --fix",
+    "prettier-format": "prettier 'src/**/*.ts' --write",
+    "build": "rm -rf ./dist && tsup && tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xpolyflow/polyflow-sdk.git"
+  },
+  "author": "Polyflow",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/0xpolyflow/polyflow-sdk/issues"
+  },
+  "homepage": "https://github.com/0xpolyflow/polyflow-sdk#readme",
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^5.48.1",
+    "@typescript-eslint/parser": "^5.48.1",
+    "eslint": "^8.31.0",
+    "eslint-config-prettier": "^8.6.0",
+    "eslint-plugin-prettier": "^4.2.1",
+    "prettier": "^2.8.2",
+    "tsup": "^6.5.0",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "@ethersproject/bignumber": "^5.7.0",
+    "awesome-graphql-client": "^0.13.0",
+    "axios": "^1.2.2",
+    "device-detector-js": "^3.0.3"
+  }
+}
