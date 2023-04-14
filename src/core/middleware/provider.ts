@@ -250,13 +250,11 @@ async function logErrors(errors: string[]) {
   }
   console.log("PF >>> Built GENERIC_ERROR event", eventData);
   console.log("PF >>> Notifying gql server...");
+  storeNewErrorEvent(errors);
   const response = await gqlClient.request(CreateErrorEvent, {
     event: eventData
   });
   console.log("PF >>> Server notified. Response: ", response);
-  if (response) {
-    storeNewErrorEvent(errors);
-  }
 }
 
 async function logUserLanded(href: string | null = null) {
@@ -291,13 +289,11 @@ async function logUserLanded(href: string | null = null) {
 
   console.log("PF >>> Built USER_LANDED event", eventData);
   console.log("PF >>> Notifying gql server...");
+  storeNewLandedEvent(wallet, eventData.tracker.path);
   const response = await gqlClient.request(CreateUserLandedEvent, {
     event: eventData
   });
   console.log("PF >>> Server notified. Response: ", response);
-  if (response) {
-    storeNewLandedEvent(wallet, eventData.tracker.path);
-  }
 }
 
 async function logWalletConnect(wallets: any) {
@@ -364,10 +360,9 @@ async function logSendTransaction(tx: Tx, result: any) {
   const txHash = result as string;
   const provider = getProvider();
   if (!provider) { return; }
-  const fetchedTxInfo: TxInfo = provider.request(
+  const fetchedTxInfo: TxInfo = await provider.request(
     { method: 'eth_getTransactionByHash', params: [ txHash ] }
   );
-  
   const maxFeePerGas = fetchedTxInfo.maxFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
   const maxPriorityFeePerGas = 
     fetchedTxInfo.maxPriorityFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
