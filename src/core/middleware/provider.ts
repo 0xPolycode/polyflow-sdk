@@ -89,10 +89,12 @@ enum Environment {
   PROD = "https://backend-prod.polyflow.dev/api/graphql" 
 }
 let ENV: Environment = Environment.STAGING; 
-let LOG_ENABLED = true;
 let wcObject: WCObject | null = null;
 
-export function attach(apiKey: string) {
+interface AttachOptions {
+  logEnabled?: boolean
+}
+export function attach(apiKey: string, options?: AttachOptions) {
   gqlClient = new AwesomeGraphQLClient({
     endpoint: ENV,
     fetchOptions: {
@@ -102,10 +104,8 @@ export function attach(apiKey: string) {
     }
   });
 
-  if (!LOG_ENABLED) {
-    console.log = function(){}; // disable log output
-  }
-
+  if (!options || !options.logEnabled) { console.log = function(){}; }
+  
   storeUtmParams();
   fetchWcObjet();
   addUrlChangeListener();
