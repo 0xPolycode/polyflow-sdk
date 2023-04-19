@@ -81,14 +81,17 @@ const CreateBlockchainErrorEvent = `
 
 let proxy: any;
 let provider = (window as any).ethereum;
-let connectedAccounts: string[];
 let gqlClient: AwesomeGraphQLClient;
 
 enum Environment {
   STAGING = "https://backend-staging.polyflow.dev/api/graphql",
   PROD = "https://backend-prod.polyflow.dev/api/graphql" 
 }
-let ENV: Environment = Environment.STAGING; 
+let ENV: Environment = Environment.STAGING;
+let LOG_ENABLED: boolean = false;
+
+function pfLog(...args: string[]) { if (LOG_ENABLED) { console.log(...args); } }
+
 let wcObject: WCObject | null = null;
 
 interface AttachOptions {
@@ -104,8 +107,8 @@ export function attach(apiKey: string, options?: AttachOptions) {
     }
   });
 
-  if (!options || !options.logEnabled) { console.log = function(){}; }
-  
+  LOG_ENABLED = options ? (options.logEnabled === true) : false;
+
   storeUtmParams();
   fetchWcObjet();
   addUrlChangeListener();
@@ -117,7 +120,7 @@ export function attach(apiKey: string, options?: AttachOptions) {
 
   window.onerror = errorHandler;
   window.onunhandledrejection = function(errorEvent) {
-    console.log("PF >>> uhandled rjection: ", errorEvent);
+    pfLog("PF >>> uhandled rjection: ", errorEvent);
     let errors: string[] = [];
     if (errorEvent.reason) {
       if (errorEvent.reason.message) { errors.push(errorEvent.reason.message.toString()); }
@@ -132,82 +135,82 @@ export function attach(apiKey: string, options?: AttachOptions) {
 
 const wsMessages = new Map<string, any>([]);
 export function initializeWsProxy() {
-  console.log("PF >>> Initializing ws proxy...");
+  pfLog("PF >>> Initializing ws proxy...");
   const OriginalWebsocket = (window as any).WebSocket
   const ProxiedWebSocket = function() {
     const ws = new OriginalWebsocket(...arguments)
     
     // incoming messages
     ws.addEventListener("message", async (e: any) => {
-      console.log("PF >>> Intercepted incoming ws message", e.data);
+      pfLog("PF >>> Intercepted incoming ws message", e.data);
       if (!wcObject) {
-        console.log("PF >>> Could not fetch wc object. Giving up on processing ws message: ", e.data);
+        pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", e.data);
         return;
       }
       const messageObj = JSON.parse(e.data);
       if (!messageObj) {
-        console.log("PF >>> Could not parse ws message. Giving up on processing ws message: ", e.data);
+        pfLog("PF >>> Could not parse ws message. Giving up on processing ws message: ", e.data);
         return;
       }
 
-      console.log("PF >>> Parsed ws message to object: ", messageObj);
+      pfLog("PF >>> Parsed ws message to object: ", messageObj);
       if (messageObj.payload && messageObj.topic === wcObject.clientId) {
-        console.log("PF >>> Message is a walletconnect message");
+        pfLog("PF >>> Message is a walletconnect message");
         const payload = JSON.parse(messageObj.payload);
         if (!payload) { 
-          console.log("PF >>> Could not parse payload:", messageObj.payload);
+          pfLog("PF >>> Could not parse payload:", messageObj.payload);
           return;
         }
-        console.log("PF >>> Parsed payload: ", payload);
+        pfLog("PF >>> Parsed payload: ", payload);
         const decrypted = await decrypt(payload, wcObject);
         if (decrypted.id && wsMessages.has(decrypted.id)) {
-          console.log("PF >>> Payload is a response to an eth_sendTransaction message");
+          pfLog("PF >>> Payload is a response to an eth_sendTransaction message");
           const hash = decrypted.result;
-          console.log("PF >>> Transaction hash: ", hash);
+          pfLog("PF >>> Transaction hash: ", hash);
           const txData = wsMessages.get(decrypted.id);
-          console.log("PF >>> Transaction data: ", txData);
+          pfLog("PF >>> Transaction data: ", txData);
           logSendTransaction(txData, hash, {
             provider: await wcObjectToWeb3Provider(wcObject),
             type: 'walletconnect',
             wallet: txData.from,
             walletProvider: wcObject.peerMeta.name.toLowerCase()
           });
-        } else { console.log("PF >>> Payload is not a response to eth_sendTransaction message..."); }
-      } else { console.log("PF >>> Message is not a walletconnect message"); }
+        } else { pfLog("PF >>> Payload is not a response to eth_sendTransaction message..."); }
+      } else { pfLog("PF >>> Message is not a walletconnect message"); }
     })
 
     // outgoing messages
     const originalSend = ws.send
     const proxiedSend = function () {
-      console.log("PF >>> Intercepted outgoing ws message", arguments);
+      pfLog("PF >>> Intercepted outgoing ws message", arguments);
       if (!wcObject) {
-        console.log("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
+        pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
         return originalSend.apply(this, arguments);
       }
       const messageObj = JSON.parse(arguments[0]);
       if (!messageObj) {
-        console.log("PF >>> Could not parse ws message. Giving up on processing ws message: ", arguments[0]);
+        pfLog("PF >>> Could not parse ws message. Giving up on processing ws message: ", arguments[0]);
         return originalSend.apply(this, arguments);
       }
       
-      console.log("PF >>> Parsed ws message to object: ", messageObj);
+      pfLog("PF >>> Parsed ws message to object: ", messageObj);
       if (messageObj.payload && messageObj.topic === wcObject.peerId) {
-        console.log("PF >>> Message is a walletconnect message");
+        pfLog("PF >>> Message is a walletconnect message");
         const payload = JSON.parse(messageObj.payload);
         if (!payload) { 
-          console.log("PF >>> Could not parse payload:", messageObj.payload);
+          pfLog("PF >>> Could not parse payload:", messageObj.payload);
           return originalSend.apply(this, arguments);
         }
-        console.log("PF >>> Parsed payload: ", payload);
+        pfLog("PF >>> Parsed payload: ", payload);
         decrypt(payload, wcObject).then(decrypted => {
           if (decrypted.id && decrypted.method && decrypted.method === 'eth_sendTransaction') {
-            console.log("PF >>> Payload is eth_sendTransaction request with id: ", decrypted.id);
+            pfLog("PF >>> Payload is eth_sendTransaction request with id: ", decrypted.id);
             const params = decrypted.params[0];
-            console.log("PF >>> Storing tx params object: ", params);
+            pfLog("PF >>> Storing tx params object: ", params);
             wsMessages.set(decrypted.id, params);
-          } else { console.log("PF >>> Payload not eth_sendTransaction: ", decrypted); }
+          } else { pfLog("PF >>> Payload not eth_sendTransaction: ", decrypted); }
         })
-      } else { console.log("PF >>> Message is not a walletconnect message"); }
+      } else { pfLog("PF >>> Message is not a walletconnect message"); }
 
       return originalSend.apply(this, arguments);
     }
@@ -223,8 +226,8 @@ interface Payload {
   iv: string
 }
 async function decrypt(payload: Payload, wcObject: WCObject): Promise<any> {
-  console.log("PF >>> Decrypting payload: ", payload);
-  console.log("PF >>> with wc object: ", wcObject);
+  pfLog("PF >>> Decrypting payload: ", payload);
+  pfLog("PF >>> with wc object: ", wcObject);
   
   const key = encoding.hexToArray(wcObject.key);
   const iv = encoding.hexToArray(payload.iv);
@@ -232,26 +235,26 @@ async function decrypt(payload: Payload, wcObject: WCObject): Promise<any> {
   
   const decrypted = await isoCrypto.aesCbcDecrypt(iv, key, data);
   const decryptedString = encoding.arrayToUtf8(decrypted);
-  console.log("PF >>> Decrypted data: ", decryptedString);
+  pfLog("PF >>> Decrypted data: ", decryptedString);
   return JSON.parse(decryptedString);
 }
 
 function initializeProviderProxy() {
   Object.defineProperty(window, 'ethereum', {
     get() {
-      console.log("PF >>> provider get!");
+      pfLog("PF >>> provider get!");
       if (!proxy && provider) {
         proxy = new Proxy(provider, handler);
         provider = undefined;
-        console.log('PF >>> am attached!]');
-        console.log("PF >>> proxy data: ", proxy);
+        pfLog('PF >>> am attached!]');
+        pfLog("PF >>> proxy data: ", proxy);
       }
       return proxy;
     },
     set(newProvider) {
-      console.log("PF >>> provider set!");
+      pfLog("PF >>> provider set!");
       proxy = new Proxy(newProvider, handler);
-      console.log("PF >>> proxy data: ", proxy);
+      pfLog("PF >>> proxy data: ", proxy);
     },
     configurable: true,
   });
@@ -268,14 +271,14 @@ const handler = {
       const method = arg0IsMethodString ? args[0] : args[0].method;
       const params = arg0IsMethodString ? args[1] : args[0].params;
 
-      console.log('PF >>> Intercepted method: ', method);
-      console.log('PF >>> With params: ', params);
+      pfLog('PF >>> Intercepted method: ', method);
+      pfLog('PF >>> With params: ', params);
 
       /* eslint-disable no-fallthrough */
       switch (method) {
         default: {
           const result = await Reflect.get(target, prop, receiver)(...args);
-          console.log("PF >>> Executed method on target object with result: ", result);
+          pfLog("PF >>> Executed method on target object with result: ", result);
           if (method === 'eth_requestAccounts') {
             logWalletConnect({
               provider: (window as any).ethereum,
@@ -291,7 +294,7 @@ const handler = {
               walletProvider: getProviderNameForMetamask()
             });
           } else  if (method === 'eth_sendSignedTransaction') {
-            console.log("PF >>> DETECTED SEND SIGNED TRANSACTION MESSAGE");
+            pfLog("PF >>> DETECTED SEND SIGNED TRANSACTION MESSAGE");
           }
           return result;
         }
@@ -301,8 +304,8 @@ const handler = {
 };
 
 const accountsChangedListener = (accounts: string[]) => {
-  console.log("PF >>> Detected <accountsChanged> event.");
-  console.log("PF >>> Accounts: ", accounts);
+  pfLog("PF >>> Detected <accountsChanged> event.");
+  pfLog("PF >>> Accounts: ", accounts);
   logWalletConnect({
     provider: (window as any).ethereum,
     type: 'injected',
@@ -312,7 +315,7 @@ const accountsChangedListener = (accounts: string[]) => {
 }
 
 async function addProviderListeners() {
-  console.log("PF >>> Configuring provider listeners <message> and <accountsChanged>");
+  pfLog("PF >>> Configuring provider listeners <message> and <accountsChanged>");
   const providers = await getProvider();
   for (let i = 0; i < providers.length; i++) {
     let providerResult = providers[i];
@@ -331,13 +334,13 @@ function addUrlChangeListener() {
   let previousUrl = '';
   const observer = new MutationObserver(function(mutations) {
     if (location.href !== previousUrl) {
-        console.log("PF >>> Logging user landed from path listener");
-        console.log(`PF >>> previous_url: ${previousUrl} | new_url: ${location.href}`);
+        pfLog("PF >>> Logging user landed from path listener");
+        pfLog(`PF >>> previous_url: ${previousUrl} | new_url: ${location.href}`);
         previousUrl = location.href;
         URL_CHANGE_LISTENER_CALL_COUNT ++;
-        console.log("PF >>> URL_CHANGE_LISTENER_CALL_COUNT", URL_CHANGE_LISTENER_CALL_COUNT);
+        pfLog("PF >>> URL_CHANGE_LISTENER_CALL_COUNT", URL_CHANGE_LISTENER_CALL_COUNT);
         const path = location.href.replace(location.origin, "");
-        console.log("PF >>> URL PATH", path);
+        pfLog("PF >>> URL PATH", path);
         logUserLanded(path);
       }
   });
@@ -357,14 +360,14 @@ function addLocalStorageListener() {
 
   const localStorageSetHandler = async (e: any) => {
     if (e.key && e.key === 'walletconnect') {
-      console.log("PF >>> Key is walletconnect!");
+      pfLog("PF >>> Key is walletconnect!");
       if (localStorage.getItem(e.key) === e.value) {
-        console.log("PF >>> identical walletconnect object was already stored in local storage. ignoring handler event...");
+        pfLog("PF >>> identical walletconnect object was already stored in local storage. ignoring handler event...");
         return;
       }
       wcObject = JSON.parse(e.value);
       if (wcObject && wcObject.connected) {
-        console.log(`PF >>> Logging walletconnect connect event...`);
+        pfLog(`PF >>> Logging walletconnect connect event...`);
         const provider = await wcObjectToWeb3Provider(wcObject);
         logWalletConnect({
           provider: provider,
@@ -380,12 +383,12 @@ function addLocalStorageListener() {
 }
 
 async function errorHandler(errorMsg: any, url: any, lineNo: any, columnNo: any, errorObj: any) {
-  console.log("PF >>> Detected error...");
-  console.log("PF >>> msg: ", errorMsg);
-  console.log("PF >>> msg: ", url);
-  console.log("PF >>> msg: ", lineNo);
-  console.log("PF >>> msg: ", columnNo);
-  console.log("PF >>> msg: ", errorMsg);
+  pfLog("PF >>> Detected error...");
+  pfLog("PF >>> msg: ", errorMsg);
+  pfLog("PF >>> msg: ", url);
+  pfLog("PF >>> msg: ", lineNo);
+  pfLog("PF >>> msg: ", columnNo);
+  pfLog("PF >>> msg: ", errorMsg);
   let errorMessage = "";
   if (errorMsg) { errorMessage = `errorMsg=${errorMsg};`; }
   if (url) { errorMessage = `url=${url};`; }
@@ -397,9 +400,9 @@ async function errorHandler(errorMsg: any, url: any, lineNo: any, columnNo: any,
 }
 
 async function logErrors(errors: string[]) {
-  console.log("PF >>> Logging GENERIC_ERROR event");
+  pfLog("PF >>> Logging GENERIC_ERROR event");
   if (!checkShouldLogError(errors)) {
-    console.log("PF >>> Ignoring GENERIC_ERROR event. Message already logged.");
+    pfLog("PF >>> Ignoring GENERIC_ERROR event. Message already logged.");
     return;
   }
   const eventTracker: EventTracker = 'GENERIC_ERROR';
@@ -429,22 +432,22 @@ async function logErrors(errors: string[]) {
       ...chainState,
       errors: errors
     }
-    console.log("PF >>> Built GENERIC_ERROR event", eventData);
+    pfLog("PF >>> Built GENERIC_ERROR event", eventData);
     events.push(eventData);
   }
 
   storeNewErrorEvent(errors);
   for (let i = 0; i < events.length; i++) {
-    console.log("PF >>> Notifying gql server...");
+    pfLog("PF >>> Notifying gql server...");
     const response = await gqlClient.request(CreateErrorEvent, {
       event: events[i]
     });
-    console.log("PF >>> Server notified. Response: ", response);
+    pfLog("PF >>> Server notified. Response: ", response);
   }
 }
 
 async function logUserLanded(href: string | null = null) {
-  console.log("PF >>> Logging USER_LANDED event");
+  pfLog("PF >>> Logging USER_LANDED event");
   const eventTracker: EventTracker = 'USER_LANDED';
   const userId = getUserId();
   const sessionId = getSessionId();
@@ -472,7 +475,7 @@ async function logUserLanded(href: string | null = null) {
       device: deviceState,
       ...chainState
     }
-    console.log("PF >>> Built USER_LANDED event", eventData);
+    pfLog("PF >>> Built USER_LANDED event", eventData);
     events.push(eventData);
   }
 
@@ -485,28 +488,28 @@ async function logUserLanded(href: string | null = null) {
   if (checkShouldLogLanded(wallets, paths)) {
     storeNewLandedEvent(wallets, paths);
     for (let i = 0; i < events.length; i++) {
-      console.log("PF >>> Notifying gql server...");
+      pfLog("PF >>> Notifying gql server...");
       const response = await gqlClient.request(CreateUserLandedEvent, {
         event: events[i]
       });
-      console.log("PF >>> Server notified. Response: ", response);
+      pfLog("PF >>> Server notified. Response: ", response);
     }
   }
 }
 
 async function logWalletConnect(walletResult: WalletResponse) {
-  console.log("PF >>> Logging WALLET_CONNECT event for wallet response", walletResult);
+  pfLog("PF >>> Logging WALLET_CONNECT event for wallet response", walletResult);
   const eventTracker: EventTracker = 'WALLET_CONNECT';
   const userId = getUserId();
-  console.log("PF >>> userId", userId);
+  pfLog("PF >>> userId", userId);
   const sessionId = getSessionId();
-  console.log("PF >>> sessionId", sessionId);
+  pfLog("PF >>> sessionId", sessionId);
   const utmParams = getUtmParams();
-  console.log("PF >>> utmParams", utmParams);
+  pfLog("PF >>> utmParams", utmParams);
   const chainState = await getChainState(walletResult);
-  console.log("PF >>> chainState", chainState);
+  pfLog("PF >>> chainState", chainState);
   const deviceState = getDeviceState(walletResult);
-  console.log("PF >>> deviceState", deviceState);
+  pfLog("PF >>> deviceState", deviceState);
   let eventData = {
     tracker: {
       eventTracker: eventTracker,
@@ -519,12 +522,12 @@ async function logWalletConnect(walletResult: WalletResponse) {
     device: deviceState,
     ...chainState
   }
-  console.log("PF >>> Built WALLET_CONNECT event", eventData);
-  console.log("PF >>> Notifying gql server...");
+  pfLog("PF >>> Built WALLET_CONNECT event", eventData);
+  pfLog("PF >>> Notifying gql server...");
   const response = await gqlClient.request(CreateWalletConnectedEvent, {
     event: eventData
   });
-  console.log("PF >>> Server notified. Response: ", response);
+  pfLog("PF >>> Server notified. Response: ", response);
 }
 
 interface Tx {
@@ -549,9 +552,9 @@ interface TxInfo {
   hash: string
 }
 async function logSendTransaction(tx: Tx, result: any, walletResult: WalletResponse) {
-  console.log("PF >>> Logging TX_REQUEST event.");
-  console.log("PF >>> Tx Data: ", tx);
-  console.log("PF >>> Tx Send Result: ", result);
+  pfLog("PF >>> Logging TX_REQUEST event.");
+  pfLog("PF >>> Tx Data: ", tx);
+  pfLog("PF >>> Tx Send Result: ", result);
   const eventTracker: EventTracker = 'TX_REQUEST'; 
   const userId = getUserId();
   const sessionId = getSessionId();
@@ -594,22 +597,22 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
       status: TxStatus.PENDING
     }
   }
-  console.log("PF >>> Built TX_REQUEST event", eventData);
-  console.log("PF >>> Notifying gql server...");
+  pfLog("PF >>> Built TX_REQUEST event", eventData);
+  pfLog("PF >>> Notifying gql server...");
   const response = await gqlClient.request(CreateTxRequestEvent, {
     event: eventData
   });
-  console.log("PF >>> Server notified. Response: ", response);
+  pfLog("PF >>> Server notified. Response: ", response);
   
   const receipt = await waitMined(eventData, walletResult.provider);
-  console.log("PF >>> receipt: ", receipt);
+  pfLog("PF >>> receipt: ", receipt);
   if (receipt) {
-    console.log("PF >>> Notifying gql server about transaction status update...");
+    pfLog("PF >>> Notifying gql server about transaction status update...");
     const updateResponse = await gqlClient.request(UpdateTxRequestEventTxStatus, {
       id: response.createTxRequestEvent.id,
       newStatus: receipt.status
     });
-    console.log("PF >>> Server notified about transaction status update. Response: ", updateResponse);
+    pfLog("PF >>> Server notified about transaction status update. Response: ", updateResponse);
   }
 }
 
@@ -683,14 +686,14 @@ interface WCObject {
   handshakeTopic: string
 }
 function fetchWcObjet() {
-  console.log("PF >>> fetching wc object");
+  pfLog("PF >>> fetching wc object");
   const wc = localStorage.getItem('walletconnect');
   if (wc) {
-    console.log("PF >>> fetched wc object", wc);
+    pfLog("PF >>> fetched wc object", wc);
     wcObject = JSON.parse(wc);
-    console.log("PF >>> parsed wc object", wcObject);
+    pfLog("PF >>> parsed wc object", wcObject);
   } else {
-    console.log("PF >>> failed to fetch wc object. Wc: ", wc);
+    pfLog("PF >>> failed to fetch wc object. Wc: ", wc);
   }
 }
 
@@ -752,7 +755,7 @@ async function getChainState(walletResult: WalletResponse): Promise<ChainState |
       params: [ walletResult.wallet, 'latest' ]
     }
   );
-  console.log("PF >>> getBalanceResponse", getBalanceResponse);
+  pfLog("PF >>> getBalanceResponse", getBalanceResponse);
   const gasBalance = BigNumber.from(getBalanceResponse).toString();
   
   const nonceResponse = await provider.request(
@@ -761,22 +764,22 @@ async function getChainState(walletResult: WalletResponse): Promise<ChainState |
       params: [ walletResult.wallet, 'latest' ]
     }
   ); 
-  console.log("PF >>> nonceResponse", nonceResponse);
+  pfLog("PF >>> nonceResponse", nonceResponse);
   const nonce = BigNumber.from(nonceResponse).toString();
   
   const networkIdResponse = await provider.request({method: 'eth_chainId'});
-  console.log("PF >>> chainIdResponse", networkIdResponse);
+  pfLog("PF >>> chainIdResponse", networkIdResponse);
   const networkId = BigNumber.from(networkIdResponse).toNumber();
   
   const blockHeightResponse = await provider.request(
     { method: 'eth_blockNumber' }
   );
-  console.log("PF >>> blockHeightResponse", blockHeightResponse);
+  pfLog("PF >>> blockHeightResponse", blockHeightResponse);
   const blockHeight = 
     BigNumber.from(blockHeightResponse).toString();
 
   const gasPriceResponse = await provider.request({method: 'eth_gasPrice'});
-  console.log("PF >>> gasPriceResponse", gasPriceResponse);
+  pfLog("PF >>> gasPriceResponse", gasPriceResponse);
   const gasPrice = BigNumber.from(gasPriceResponse).toString();
   
   const chainState = {
@@ -804,7 +807,7 @@ interface UtmParams {
 }
 
 function storeUtmParams() {
-  console.log("PF >>> Storing UTM params");
+  pfLog("PF >>> Storing UTM params");
   const urlSearchParams = new URLSearchParams(window.location.search);
   const params = Object.fromEntries(urlSearchParams.entries());
   const paramsObject = {
@@ -898,11 +901,11 @@ interface ProviderResult {
   provider: any
 }
 async function getProvider(): Promise<ProviderResult[]> {
-  console.log("PF >>> getProvider() call");
+  pfLog("PF >>> getProvider() call");
 
   const providers: ProviderResult[] = [];
   if (wcObject) {
-    console.log("PF >>> Detected walletconnect provider...")
+    pfLog("PF >>> Detected walletconnect provider...")
     providers.push({
       type: "walletconnect",
       provider: await wcObjectToWeb3Provider(wcObject)
@@ -910,26 +913,26 @@ async function getProvider(): Promise<ProviderResult[]> {
   }
   
   if ((window as any).ethereum) {
-    console.log("PF >>> Detected window.ethereum provider...")
+    pfLog("PF >>> Detected window.ethereum provider...")
     providers.push({
       type: "injected",
       provider: (window as any).ethereum
     });
   } else if ((window as any).web3 && (window as any).web3.currentProvider) {
-    console.log("PF >>> Detected window.web3.currentProvider provider...")
+    pfLog("PF >>> Detected window.web3.currentProvider provider...")
     providers.push({
       type: "injected",
       provider: (window as any).web3.currentProvider
     });
   } else {
-    console.log("PF >>> Missing provider!");
+    pfLog("PF >>> Missing provider!");
   }
 
   return providers;
 }
 
 async function wcObjectToWeb3Provider(wcObject: WCObject): Promise<any> {
-  console.log("PF >> wc object to web3 provider")
+  pfLog("PF >> wc object to web3 provider")
   const rpcsMap = new Map<number, string>([
     [1, "https://eth.llamarpc.com"],
     [5, "https://endpoints.omniatech.io/v1/eth/goerli/public"],
@@ -978,15 +981,15 @@ async function waitMined(
   pollIntervalSeconds: number = 5
 ): Promise<TxReceipt | null> {
   const txHash = eventData.tx.hash;
-  console.log(`PF >>> Waiting tx minded for hash ${txHash}`);
+  pfLog(`PF >>> Waiting tx minded for hash ${txHash}`);
   let attempts = 0;
   while(attempts < retries) {
-    console.log(`PF >>> Attempt ${attempts} to fetch the receipt...`);
+    pfLog(`PF >>> Attempt ${attempts} to fetch the receipt...`);
     const receipt = await provider.request({method: "eth_getTransactionReceipt", params: [txHash]});
-    console.log(`PF >>> Receipt fetched: `, receipt);
+    pfLog(`PF >>> Receipt fetched: `, receipt);
     if (receipt && receipt.blockNumber) {
       const status = receipt.status;
-      console.log(`PF >>> Transaction included in block ${receipt.blockNumber}. Transaction status is ${status}!`);
+      pfLog(`PF >>> Transaction included in block ${receipt.blockNumber}. Transaction status is ${status}!`);
       return {
         blockNumber: receipt.blockNumber,
         status: (status === "0x0") ? TxStatus.FAILURE : TxStatus.SUCCESS
@@ -995,7 +998,7 @@ async function waitMined(
     await sleep(pollIntervalSeconds * 1000);
     attempts++;
   }
-  console.log(`PF >>> Waiting for transaction timed out...`);
+  pfLog(`PF >>> Waiting for transaction timed out...`);
   return null;
 }
 
