@@ -1,6 +1,6 @@
 {
   "name": "@polyflow/sdk",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Polyflow SDK",
   "main": "dist/browser/index.js",
   "type": "module",
@@ -38,7 +38,6 @@
     "@walletconnect/crypto": "^1.0.3",
     "@walletconnect/utils": "^2.7.0",
     "awesome-graphql-client": "^0.13.0",
-    "axios": "^1.2.2",
     "crypto-js": "^4.1.1",
     "iso-crypto": "^1.1.0",
     "ua-parser-js": "^1.0.35",

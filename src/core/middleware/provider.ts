@@ -1,5 +1,3 @@
-import { SDKError } from '../error';
-import { PolyflowSDK } from '../sdk';
 import { BigNumber } from '@ethersproject/bignumber';
 import { AwesomeGraphQLClient } from 'awesome-graphql-client';
 import * as encoding from "@walletconnect/encoding";
@@ -1003,67 +1001,4 @@ async function waitMined(
 
 async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**** WIDGET FEATURES - Enable once we support UI components on the Polyflow Widget! *******/
-
-function sdk(forChain = '80001'): PolyflowSDK {
-  const instance = sdks.get(forChain);
-  if (instance) {
-    return instance;
-  } else {
-    throw new SDKError(`Chain ${forChain} not supported!`);
-  }
-}
-
-async function getAccounts(method: string) {
-  console.log('Polyflow Middleware:: Generating auth action...');
-  const authAction = await sdk().authorizeWallet({
-    redirect_url:
-      'https://widget.polyflow.dev/137/wallet-middleware/request-authorization/${id}/action',
-  });
-  console.log(
-    `Polyflow Middleware:: Auth action generated! Url: ${authAction.actionUrl}`
-  );
-  const authActionResult = await authAction.present();
-  console.log(
-    `Polyflow Middleware:: intercepted call ${method} and executed on middleware. Result: `,
-    authActionResult
-  );
-  if (authActionResult) {
-    connectedAccounts = [authActionResult.wallet];
-    return connectedAccounts;
-  } else {
-    return [];
-  }
-}
-
-const sdks = new Map<string, PolyflowSDK>([]);
-
-async function executeTransaction(tx: Tx, method: string) {
-  console.log(
-    'Polyflow Middleware:: Generating arbitrary transaction action...'
-  );
-  let value = '0';
-  if (tx.value) {
-    value = BigNumber.from(tx.value).toString();
-  }
-  const transactionAction = await sdk().executeTransaction({
-    contract_address: tx.to,
-    function_data: tx.data,
-    eth_amount: value,
-    caller_address: tx.from,
-    redirect_url:
-      'https://widget.polyflow.dev/137/wallet-middleware/request-arbitrary-call/${id}/action',
-  });
-  console.log(
-    `Polyflow Middleware:: Action generated! Url: ${transactionAction.actionUrl}`
-  );
-  const transactionResult = await transactionAction.present();
-  console.log(
-    `Polyflow Middleware:: intercepted call ${method} and executed on middleware. Result: `,
-    transactionResult
-  );
-
-  return transactionResult.hash;
 }
