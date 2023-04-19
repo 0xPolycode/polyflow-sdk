@@ -2,12 +2,12 @@ import { SDKError } from '../error';
 import { PolyflowSDK } from '../sdk';
 import { BigNumber } from '@ethersproject/bignumber';
 import { AwesomeGraphQLClient } from 'awesome-graphql-client';
-import DeviceDetector from "device-detector-js";
 import * as encoding from "@walletconnect/encoding";
 import * as isoCrypto from "@walletconnect/crypto";
 import * as timeZoneCityToCountry from "../localization/tz-cities-to-countries.json";
 import HttpProvider from 'web3-providers-http';
 import { JsonRpcResponse } from 'web3-core-helpers';
+import uaParser from 'ua-parser-js';
 
 class Web3HttpProvider extends HttpProvider {
   async request(payload: any): Promise<JsonRpcResponse | null> {
@@ -85,14 +85,13 @@ let proxy: any;
 let provider = (window as any).ethereum;
 let connectedAccounts: string[];
 let gqlClient: AwesomeGraphQLClient;
-let deviceDetector = new DeviceDetector();
 
 enum Environment {
   STAGING = "https://backend-staging.polyflow.dev/api/graphql",
   PROD = "https://backend-prod.polyflow.dev/api/graphql" 
 }
 let ENV: Environment = Environment.STAGING; 
-let LOG_ENABLED = false;
+let LOG_ENABLED = true;
 let wcObject: WCObject | null = null;
 
 export function attach(apiKey: string) {
@@ -108,7 +107,6 @@ export function attach(apiKey: string) {
   if (!LOG_ENABLED) {
     console.log = function(){}; // disable log output
   }
-
 
   storeUtmParams();
   fetchWcObjet();
@@ -173,7 +171,8 @@ export function initializeWsProxy() {
           logSendTransaction(txData, hash, {
             provider: await wcObjectToWeb3Provider(wcObject),
             type: 'walletconnect',
-            wallet: txData.from
+            wallet: txData.from,
+            walletProvider: wcObject.peerMeta.name.toLowerCase()
           });
         } else { console.log("PF >>> Payload is not a response to eth_sendTransaction message..."); }
       } else { console.log("PF >>> Message is not a walletconnect message"); }
@@ -187,9 +186,6 @@ export function initializeWsProxy() {
         console.log("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
         return originalSend.apply(this, arguments);
       }
-      // Eventually change the sent data
-      // arguments[0] = ...
-      // arguments[1] = ...
       const messageObj = JSON.parse(arguments[0]);
       if (!messageObj) {
         console.log("PF >>> Could not parse ws message. Giving up on processing ws message: ", arguments[0]);
@@ -243,7 +239,6 @@ async function decrypt(payload: Payload, wcObject: WCObject): Promise<any> {
 }
 
 function initializeProviderProxy() {
-
   Object.defineProperty(window, 'ethereum', {
     get() {
       console.log("PF >>> provider get!");
@@ -286,14 +281,16 @@ const handler = {
           if (method === 'eth_requestAccounts') {
             logWalletConnect({
               provider: (window as any).ethereum,
-              type: 'metamask',
-              wallet: result
+              type: 'injected',
+              wallet: result[0],
+              walletProvider: getProviderNameForMetamask()
             });
           } else if (method === 'eth_sendTransaction') {
             logSendTransaction(params[0], result, {
               provider: (window as any).ethereum,
-              type: 'metamask',
-              wallet: params[0].from
+              type: 'injected',
+              wallet: params[0].from,
+              walletProvider: getProviderNameForMetamask()
             });
           } else  if (method === 'eth_sendSignedTransaction') {
             console.log("PF >>> DETECTED SEND SIGNED TRANSACTION MESSAGE");
@@ -310,19 +307,23 @@ const accountsChangedListener = (accounts: string[]) => {
   console.log("PF >>> Accounts: ", accounts);
   logWalletConnect({
     provider: (window as any).ethereum,
-    type: "metamask",
-    wallet: accounts[0]
+    type: 'injected',
+    wallet: accounts[0],
+    walletProvider: getProviderNameForMetamask()
   });
 }
 
 async function addProviderListeners() {
   console.log("PF >>> Configuring provider listeners <message> and <accountsChanged>");
-  const provider = await getProvider();
-  if (!provider) { return; }
-  if (provider.type !== 'metamask') { return; }
-  // accounts changed listener
-  provider.provider.removeListener('accountsChanged', accountsChangedListener);
-  provider.provider.on('accountsChanged', accountsChangedListener);
+  const providers = await getProvider();
+  for (let i = 0; i < providers.length; i++) {
+    let providerResult = providers[i];
+    if (providerResult.type === 'injected') {
+      // accounts changed listener
+      providerResult.provider.removeListener('accountsChanged', accountsChangedListener);
+      providerResult.provider.on('accountsChanged', accountsChangedListener);
+    }
+  }
 }
 
 let URL_CHANGE_LISTENER_CALL_COUNT = 0;
@@ -370,7 +371,8 @@ function addLocalStorageListener() {
         logWalletConnect({
           provider: provider,
           type: 'walletconnect',
-          wallet: wcObject.accounts[0]
+          wallet: wcObject.accounts[0],
+          walletProvider: wcObject.peerMeta.name.toLowerCase()
         });
       }
     }
@@ -406,33 +408,41 @@ async function logErrors(errors: string[]) {
   const userId = getUserId();
   const sessionId = getSessionId();
   const utmParams = getUtmParams();
-  const walletResult = await fetchWallet();
+  const walletsList = await fetchWallet();
 
-  let chainState = {};
-  if (walletResult) {
-    chainState = await getChainState(walletResult) ?? {};
+  const events = [];
+  for (let i = 0; i < walletsList.length; i++) {
+    const walletResult = walletsList[i];
+    let chainState = {};
+    if (walletResult) {
+      chainState = await getChainState(walletResult) ?? {};
+    }
+    const deviceState = getDeviceState(walletResult);
+    let eventData = {
+      tracker: {
+        eventTracker: eventTracker,
+        userId: userId,
+        sessionId: sessionId,
+        origin: location.hostname,
+        path: location.pathname,
+        ...utmParams
+      },
+      device: deviceState,
+      ...chainState,
+      errors: errors
+    }
+    console.log("PF >>> Built GENERIC_ERROR event", eventData);
+    events.push(eventData);
   }
-  const deviceState = getDeviceState(walletResult);
-  let eventData = {
-    tracker: {
-      eventTracker: eventTracker,
-      userId: userId,
-      sessionId: sessionId,
-      origin: location.hostname,
-      path: location.pathname,
-      ...utmParams
-    },
-    device: deviceState,
-    ...chainState,
-    errors: errors
-  }
-  console.log("PF >>> Built GENERIC_ERROR event", eventData);
-  console.log("PF >>> Notifying gql server...");
+
   storeNewErrorEvent(errors);
-  const response = await gqlClient.request(CreateErrorEvent, {
-    event: eventData
-  });
-  console.log("PF >>> Server notified. Response: ", response);
+  for (let i = 0; i < events.length; i++) {
+    console.log("PF >>> Notifying gql server...");
+    const response = await gqlClient.request(CreateErrorEvent, {
+      event: events[i]
+    });
+    console.log("PF >>> Server notified. Response: ", response);
+  }
 }
 
 async function logUserLanded(href: string | null = null) {
@@ -442,34 +452,47 @@ async function logUserLanded(href: string | null = null) {
   const sessionId = getSessionId();
   const utmParams = getUtmParams();
 
-  const walletResult = await fetchWallet();
-  let chainState = {};
-  if (walletResult) {
-    chainState = await getChainState(walletResult) ?? {};
-  }
-
-  const deviceState = getDeviceState(walletResult);
-
-  let eventData = {
-    tracker: {
-      eventTracker: eventTracker,
-      userId: userId,
-      sessionId: sessionId,
-      origin: location.hostname,
-      path: href ?? (location.pathname+location.search),
-      ...utmParams
-    },
-    device: deviceState,
-    ...chainState
-  }
-  if (checkShouldLogLanded(walletResult?.wallet ?? "", eventData.tracker.path)) {
+  const walletsList = await fetchWallet();
+  let events = [];
+  for (let i = 0; i < walletsList.length; i++) {
+    const walletResult = walletsList[i];
+    let chainState = {};
+    if (walletResult) {
+      chainState = await getChainState(walletResult) ?? {};
+    }
+  
+    const deviceState = getDeviceState(walletResult);
+    let eventData = {
+      tracker: {
+        eventTracker: eventTracker,
+        userId: userId,
+        sessionId: sessionId,
+        origin: location.hostname,
+        path: href ?? (location.pathname+location.search),
+        ...utmParams
+      },
+      device: deviceState,
+      ...chainState
+    }
     console.log("PF >>> Built USER_LANDED event", eventData);
-    console.log("PF >>> Notifying gql server...");
-    storeNewLandedEvent(walletResult?.wallet ?? "", eventData.tracker.path);
-    const response = await gqlClient.request(CreateUserLandedEvent, {
-      event: eventData
-    });
-    console.log("PF >>> Server notified. Response: ", response);
+    events.push(eventData);
+  }
+
+  const paths = events.map(e => e.tracker.path).join(",");
+  const wallets = events.map((e: any) => {
+    if (e.wallet && e.wallet.walletAddress) {
+      return e.wallet.walletAddress
+    } else { return ""; }
+  }).join(",");
+  if (checkShouldLogLanded(wallets, paths)) {
+    storeNewLandedEvent(wallets, paths);
+    for (let i = 0; i < events.length; i++) {
+      console.log("PF >>> Notifying gql server...");
+      const response = await gqlClient.request(CreateUserLandedEvent, {
+        event: events[i]
+      });
+      console.log("PF >>> Server notified. Response: ", response);
+    }
   }
 }
 
@@ -627,15 +650,15 @@ function storeNewErrorEvent(errors: string[]) {
   );
 }
 
-function checkShouldLogLanded(wallet: string, path: string): boolean {
+function checkShouldLogLanded(wallets: string, paths: string): boolean {
   const lastLoggedUserLandedWallet = sessionStorage.getItem(PF_LAST_USER_LANDED_WALLET_KEY) ?? "";
   const lastLoggedUserLandedPath = sessionStorage.getItem(PF_LAST_USER_LANDED_PATH_KEY) ?? "";
   
-  return (wallet != lastLoggedUserLandedWallet || path != lastLoggedUserLandedPath);
+  return (wallets != lastLoggedUserLandedWallet || paths != lastLoggedUserLandedPath);
 }
-function storeNewLandedEvent(wallet: string | null, path: string) {
-  sessionStorage.setItem(PF_LAST_USER_LANDED_WALLET_KEY, wallet ?? "");
-  sessionStorage.setItem(PF_LAST_USER_LANDED_PATH_KEY, path);
+function storeNewLandedEvent(wallets: string, paths: string) {
+  sessionStorage.setItem(PF_LAST_USER_LANDED_WALLET_KEY, wallets);
+  sessionStorage.setItem(PF_LAST_USER_LANDED_PATH_KEY, paths);
 }
 
 interface WCObject {
@@ -676,36 +699,37 @@ function fetchWcObjet() {
 interface WalletResponse {
   type: ProviderType,
   provider: any,
-  wallet: string
+  wallet: string,
+  walletProvider: string
 }
-async function fetchWallet(): Promise<WalletResponse | null> {
-  const providerResult = await getProvider();
-  if (providerResult) {
-    if (providerResult.type === "walletconnect") {
-      if (wcObject?.accounts[0]) {
-        return {
-          type: providerResult.type,
-          wallet: wcObject?.accounts[0],
-          provider: providerResult.provider
-        }
-      } else { return null; }
+async function fetchWallet(): Promise<WalletResponse[]> {
+  const providerResult = await getProvider()
+
+  const result: WalletResponse[] = [];
+  for (let i = 0; i < providerResult.length; i++) {
+    const p = providerResult[i];
+    if(p.type === 'walletconnect') {
+      if (!wcObject) continue;
+      result.push({
+        type: p.type,
+        wallet: wcObject.accounts[0],
+        walletProvider: wcObject.peerMeta.name.toLowerCase(),
+        provider: p.provider
+      })
+    } else {
+      const accounts: string = await p.provider.request(
+        { method: 'eth_accounts' }
+      );
+      if (!accounts || accounts.length === 0) { continue; }
+      result.push({
+        type: p.type,
+        wallet: accounts[0],
+        walletProvider: getProviderNameForMetamask(),
+        provider: p.provider
+      });
     }
-    console.log("PF >>> Calling eth_accounts...");
-    const accounts = await providerResult.provider.request(
-      { method: 'eth_accounts' }
-    );
-    console.log("PF >>> eth_accounts result: ", accounts);
-    if (accounts && accounts.length > 0) {
-      const wallet = accounts[0];
-      return {
-        type: providerResult.type,
-        wallet: wallet,
-        provider: providerResult.provider
-      };
-    } else { return null; }
-  } else {
-    return null;
   }
+  return result;
 }
 
 interface ChainState {
@@ -723,8 +747,7 @@ interface ChainState {
 }
 async function getChainState(walletResult: WalletResponse): Promise<ChainState | null> {
   const provider = walletResult.provider;
-  
-  
+
   const getBalanceResponse = await provider.request(
     {
       method: 'eth_getBalance',
@@ -812,14 +835,14 @@ interface DeviceState {
   browser?: string,
   country?: string,
   screen?: ScreenState,
-  walletProvider: string
+  walletProvider: string,
+  walletType: string
 }
 
-function getDeviceState(walletResult?: (WalletResponse | null)): DeviceState {
+function getDeviceState(walletResult: WalletResponse | null): DeviceState {
   const userAgent = window.navigator.userAgent;
-  const deviceState = deviceDetector.parse(userAgent);
-  const walletProvider = getProviderName(walletResult);
-  
+  const parsedUserAgent = uaParser(userAgent);
+
   let userCountry = "unknown";
   if (Intl) {
     const tzArr = Intl.DateTimeFormat().resolvedOptions().timeZone.split("/");
@@ -828,22 +851,23 @@ function getDeviceState(walletResult?: (WalletResponse | null)): DeviceState {
   }
   
   return {
-    os: deviceState.os?.name,
-    browser: deviceState.client?.name,
+    os: parsedUserAgent.os.name,
+    browser: parsedUserAgent.browser.name,
     country: userCountry,
     screen: {
       w: screen.width,
       h: screen.height
     },
-    walletProvider: walletProvider
+    walletType: walletResult?.type ?? 'unknown',
+    walletProvider: walletResult?.walletProvider ?? 'unknown'
   };
 }
 
 type ProviderName = 
                 'metamask'      | 
                 'trust'         | 
-                'goWallet'      |
-                'alphaWallet'   |  
+                'gowallet'      |
+                'alphawallet'   |  
                 'status'        |
                 'coinbase'      |
                 'cipher'        |
@@ -853,77 +877,57 @@ type ProviderName =
                 'localhost'     |
                 'walletconnect' |
                 'unknown';
-function getProviderName(walletResult?: WalletResponse | null): ProviderName {
-  if (!walletResult) return 'unknown';
-  if (walletResult.type === 'walletconnect') { return 'walletconnect'; }
-  const fetchedProvider = walletResult.provider;
-  if (fetchedProvider.isMetaMask)
-      return 'metamask';
 
-  if (fetchedProvider.isTrust)
-      return 'trust';
-
-  if (fetchedProvider.isGoWallet)
-      return 'goWallet';
-
-  if (fetchedProvider.isAlphaWallet)
-      return 'alphaWallet';
-
-  if (fetchedProvider.isStatus)
-      return 'status';
-
-  if (fetchedProvider.isToshi)
-      return 'coinbase';
-
-  if (typeof (window as any).__CIPHER__ !== 'undefined')
-      return 'cipher';
-
-  if (fetchedProvider.constructor.name === 'EthereumProvider')
-      return 'mist';
-
-  if (fetchedProvider.constructor.name === 'Web3FrameProvider')
-      return 'parity';
-
-  if (fetchedProvider.host && fetchedProvider.host.indexOf('infura') !== -1)
-      return 'infura';
-
-  if (fetchedProvider.host && fetchedProvider.host.indexOf('localhost') !== -1)
-      return 'localhost';
-
+function getProviderNameForMetamask(): ProviderName {
+  const fetchedProvider = (window as any).ethereum;
+  if (fetchedProvider.isMetaMask) return 'metamask';
+  if (fetchedProvider.isTrust) return 'trust';
+  if (fetchedProvider.isGoWallet) return 'gowallet';
+  if (fetchedProvider.isAlphaWallet) return 'alphawallet';
+  if (fetchedProvider.isStatus) return 'status';
+  if (fetchedProvider.isToshi) return 'coinbase';
+  if (typeof (window as any).__CIPHER__ !== 'undefined') return 'cipher';
+  if (fetchedProvider.constructor.name === 'EthereumProvider') return 'mist';
+  if (fetchedProvider.constructor.name === 'Web3FrameProvider') return 'parity';
+  if (fetchedProvider.host && fetchedProvider.host.indexOf('infura') !== -1) return 'infura';
+  if (fetchedProvider.host && fetchedProvider.host.indexOf('localhost') !== -1) return 'localhost';
   return 'unknown';
 }
 
-type ProviderType = "metamask" | "walletconnect";
+type ProviderType = "injected" | "walletconnect";
 interface ProviderResult {
   type: ProviderType,
   provider: any
 }
-async function getProvider(): Promise<ProviderResult | null> {
+async function getProvider(): Promise<ProviderResult[]> {
   console.log("PF >>> getProvider() call");
 
+  const providers: ProviderResult[] = [];
   if (wcObject) {
-    return {
+    console.log("PF >>> Detected walletconnect provider...")
+    providers.push({
       type: "walletconnect",
       provider: await wcObjectToWeb3Provider(wcObject)
-    }
+    });
   }
   
   if ((window as any).ethereum) {
     console.log("PF >>> Detected window.ethereum provider...")
-    return {
-      type: "metamask",
+    providers.push({
+      type: "injected",
       provider: (window as any).ethereum
-    };
+    });
   } else if ((window as any).web3 && (window as any).web3.currentProvider) {
     console.log("PF >>> Detected window.web3.currentProvider provider...")
-    return {
-      type: "metamask",
+    providers.push({
+      type: "injected",
       provider: (window as any).web3.currentProvider
-    }
+    });
   } else {
     console.log("PF >>> Missing provider!");
-    return null;
   }
+
+  return providers;
 }
 
 async function wcObjectToWeb3Provider(wcObject: WCObject): Promise<any> {
