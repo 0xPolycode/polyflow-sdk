@@ -90,7 +90,7 @@ enum Environment {
 let ENV: Environment = Environment.STAGING;
 let LOG_ENABLED: boolean = false;
 
-function pfLog(...args: string[]) { if (LOG_ENABLED) { console.log(...args); } }
+function pfLog(...args: any[]) { if (LOG_ENABLED) { console.log(...args); } }
 
 let wcObject: WCObject | null = null;
 
