@@ -3,7 +3,26 @@ import { PolyflowSDK } from '../sdk';
 import { BigNumber } from '@ethersproject/bignumber';
 import { AwesomeGraphQLClient } from 'awesome-graphql-client';
 import DeviceDetector from "device-detector-js";
+import * as encoding from "@walletconnect/encoding";
+import * as isoCrypto from "@walletconnect/crypto";
 import * as timeZoneCityToCountry from "../localization/tz-cities-to-countries.json";
+import HttpProvider from 'web3-providers-http';
+import { JsonRpcResponse } from 'web3-core-helpers';
+
+class Web3HttpProvider extends HttpProvider {
+  async request(payload: any): Promise<JsonRpcResponse | null> {
+    return new Promise((resolve, reject) => {
+      this.send({
+        ...payload,
+        id: 1,
+        jsonrpc: "2.0"
+      }, (err, result) => {
+        if (err) { reject(err); }
+        resolve(result?.result);
+      })
+    });
+  }
+}
 
 const PF_SDK_SESSION_KEY = 'PF_SDK_SESSION_KEY';
 const PF_SDK_USER_KEY = 'PF_SDK_USER_KEY';
@@ -68,13 +87,13 @@ let connectedAccounts: string[];
 let gqlClient: AwesomeGraphQLClient;
 let deviceDetector = new DeviceDetector();
 
-
 enum Environment {
   STAGING = "https://backend-staging.polyflow.dev/api/graphql",
   PROD = "https://backend-prod.polyflow.dev/api/graphql" 
 }
 let ENV: Environment = Environment.STAGING; 
 let LOG_ENABLED = false;
+let wcObject: WCObject | null = null;
 
 export function attach(apiKey: string) {
   gqlClient = new AwesomeGraphQLClient({
@@ -90,10 +109,14 @@ export function attach(apiKey: string) {
     console.log = function(){}; // disable log output
   }
 
+
   storeUtmParams();
-  initializeProviderProxy();
-  addProviderListeners();  
+  fetchWcObjet();
   addUrlChangeListener();
+  addLocalStorageListener();
+  initializeProviderProxy();
+  initializeWsProxy();
+  addProviderListeners();
   logUserLanded();
 
   window.onerror = errorHandler;
@@ -109,6 +132,114 @@ export function attach(apiKey: string) {
     }
   }
   return window.origin;
+}
+
+const wsMessages = new Map<string, any>([]);
+export function initializeWsProxy() {
+  console.log("PF >>> Initializing ws proxy...");
+  const OriginalWebsocket = (window as any).WebSocket
+  const ProxiedWebSocket = function() {
+    const ws = new OriginalWebsocket(...arguments)
+    
+    // incoming messages
+    ws.addEventListener("message", async (e: any) => {
+      console.log("PF >>> Intercepted incoming ws message", e.data);
+      if (!wcObject) {
+        console.log("PF >>> Could not fetch wc object. Giving up on processing ws message: ", e.data);
+        return;
+      }
+      const messageObj = JSON.parse(e.data);
+      if (!messageObj) {
+        console.log("PF >>> Could not parse ws message. Giving up on processing ws message: ", e.data);
+        return;
+      }
+
+      console.log("PF >>> Parsed ws message to object: ", messageObj);
+      if (messageObj.payload && messageObj.topic === wcObject.clientId) {
+        console.log("PF >>> Message is a walletconnect message");
+        const payload = JSON.parse(messageObj.payload);
+        if (!payload) { 
+          console.log("PF >>> Could not parse payload:", messageObj.payload);
+          return;
+        }
+        console.log("PF >>> Parsed payload: ", payload);
+        const decrypted = await decrypt(payload, wcObject);
+        if (decrypted.id && wsMessages.has(decrypted.id)) {
+          console.log("PF >>> Payload is a response to an eth_sendTransaction message");
+          const hash = decrypted.result;
+          console.log("PF >>> Transaction hash: ", hash);
+          const txData = wsMessages.get(decrypted.id);
+          console.log("PF >>> Transaction data: ", txData);
+          logSendTransaction(txData, hash, {
+            provider: await wcObjectToWeb3Provider(wcObject),
+            type: 'walletconnect',
+            wallet: txData.from
+          });
+        } else { console.log("PF >>> Payload is not a response to eth_sendTransaction message..."); }
+      } else { console.log("PF >>> Message is not a walletconnect message"); }
+    })
+
+    // outgoing messages
+    const originalSend = ws.send
+    const proxiedSend = function () {
+      console.log("PF >>> Intercepted outgoing ws message", arguments);
+      if (!wcObject) {
+        console.log("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
+        return originalSend.apply(this, arguments);
+      }
+      // Eventually change the sent data
+      // arguments[0] = ...
+      // arguments[1] = ...
+      const messageObj = JSON.parse(arguments[0]);
+      if (!messageObj) {
+        console.log("PF >>> Could not parse ws message. Giving up on processing ws message: ", arguments[0]);
+        return originalSend.apply(this, arguments);
+      }
+      
+      console.log("PF >>> Parsed ws message to object: ", messageObj);
+      if (messageObj.payload && messageObj.topic === wcObject.peerId) {
+        console.log("PF >>> Message is a walletconnect message");
+        const payload = JSON.parse(messageObj.payload);
+        if (!payload) { 
+          console.log("PF >>> Could not parse payload:", messageObj.payload);
+          return originalSend.apply(this, arguments);
+        }
+        console.log("PF >>> Parsed payload: ", payload);
+        decrypt(payload, wcObject).then(decrypted => {
+          if (decrypted.id && decrypted.method && decrypted.method === 'eth_sendTransaction') {
+            console.log("PF >>> Payload is eth_sendTransaction request with id: ", decrypted.id);
+            const params = decrypted.params[0];
+            console.log("PF >>> Storing tx params object: ", params);
+            wsMessages.set(decrypted.id, params);
+          } else { console.log("PF >>> Payload not eth_sendTransaction: ", decrypted); }
+        })
+      } else { console.log("PF >>> Message is not a walletconnect message"); }
+
+      return originalSend.apply(this, arguments);
+    }
+    ws.send = proxiedSend
+    return ws;
+  };
+  (window as any).WebSocket = ProxiedWebSocket;
+}
+
+interface Payload {
+  data: string,
+  hmac: string,
+  iv: string
+}
+async function decrypt(payload: Payload, wcObject: WCObject): Promise<any> {
+  console.log("PF >>> Decrypting payload: ", payload);
+  console.log("PF >>> with wc object: ", wcObject);
+  
+  const key = encoding.hexToArray(wcObject.key);
+  const iv = encoding.hexToArray(payload.iv);
+  const data = encoding.hexToArray(payload.data);
+  
+  const decrypted = await isoCrypto.aesCbcDecrypt(iv, key, data);
+  const decryptedString = encoding.arrayToUtf8(decrypted);
+  console.log("PF >>> Decrypted data: ", decryptedString);
+  return JSON.parse(decryptedString);
 }
 
 function initializeProviderProxy() {
@@ -153,9 +284,17 @@ const handler = {
           const result = await Reflect.get(target, prop, receiver)(...args);
           console.log("PF >>> Executed method on target object with result: ", result);
           if (method === 'eth_requestAccounts') {
-            logWalletConnect(result);
+            logWalletConnect({
+              provider: (window as any).ethereum,
+              type: 'metamask',
+              wallet: result
+            });
           } else if (method === 'eth_sendTransaction') {
-            logSendTransaction(params[0], result);
+            logSendTransaction(params[0], result, {
+              provider: (window as any).ethereum,
+              type: 'metamask',
+              wallet: params[0].from
+            });
           } else  if (method === 'eth_sendSignedTransaction') {
             console.log("PF >>> DETECTED SEND SIGNED TRANSACTION MESSAGE");
           }
@@ -169,16 +308,21 @@ const handler = {
 const accountsChangedListener = (accounts: string[]) => {
   console.log("PF >>> Detected <accountsChanged> event.");
   console.log("PF >>> Accounts: ", accounts);
-  logWalletConnect(accounts);
+  logWalletConnect({
+    provider: (window as any).ethereum,
+    type: "metamask",
+    wallet: accounts[0]
+  });
 }
 
-function addProviderListeners() {
+async function addProviderListeners() {
   console.log("PF >>> Configuring provider listeners <message> and <accountsChanged>");
-  const provider = getProvider();
+  const provider = await getProvider();
   if (!provider) { return; }
+  if (provider.type !== 'metamask') { return; }
   // accounts changed listener
-  provider.removeListener('accountsChanged', accountsChangedListener);
-  provider.on('accountsChanged', accountsChangedListener);
+  provider.provider.removeListener('accountsChanged', accountsChangedListener);
+  provider.provider.on('accountsChanged', accountsChangedListener);
 }
 
 let URL_CHANGE_LISTENER_CALL_COUNT = 0;
@@ -200,6 +344,39 @@ function addUrlChangeListener() {
   });
   const config = {subtree: true, childList: true};
   observer.observe(document, config);
+}
+
+function addLocalStorageListener() {
+  const originalSetItem: any = localStorage.setItem;
+  localStorage.setItem = function(key, value) {
+    const event: any = new Event('itemInserted');
+    event.key = key;
+    event.value = value;
+    document.dispatchEvent(event);
+    originalSetItem.apply(this, arguments);
+  };
+
+  const localStorageSetHandler = async (e: any) => {
+    if (e.key && e.key === 'walletconnect') {
+      console.log("PF >>> Key is walletconnect!");
+      if (localStorage.getItem(e.key) === e.value) {
+        console.log("PF >>> identical walletconnect object was already stored in local storage. ignoring handler event...");
+        return;
+      }
+      wcObject = JSON.parse(e.value);
+      if (wcObject && wcObject.connected) {
+        console.log(`PF >>> Logging walletconnect connect event...`);
+        const provider = await wcObjectToWeb3Provider(wcObject);
+        logWalletConnect({
+          provider: provider,
+          type: 'walletconnect',
+          wallet: wcObject.accounts[0]
+        });
+      }
+    }
+  };
+
+  document.addEventListener("itemInserted", localStorageSetHandler, false);
 }
 
 async function errorHandler(errorMsg: any, url: any, lineNo: any, columnNo: any, errorObj: any) {
@@ -229,12 +406,13 @@ async function logErrors(errors: string[]) {
   const userId = getUserId();
   const sessionId = getSessionId();
   const utmParams = getUtmParams();
-  const wallet = await fetchWallet();
+  const walletResult = await fetchWallet();
+
   let chainState = {};
-  if (wallet) {
-    chainState = await getChainState(wallet) ?? {};
+  if (walletResult) {
+    chainState = await getChainState(walletResult) ?? {};
   }
-  const deviceState = getDeviceState();
+  const deviceState = getDeviceState(walletResult);
   let eventData = {
     tracker: {
       eventTracker: eventTracker,
@@ -263,12 +441,15 @@ async function logUserLanded(href: string | null = null) {
   const userId = getUserId();
   const sessionId = getSessionId();
   const utmParams = getUtmParams();
-  const wallet = await fetchWallet();
+
+  const walletResult = await fetchWallet();
   let chainState = {};
-  if (wallet) {
-    chainState = await getChainState(wallet) ?? {};
+  if (walletResult) {
+    chainState = await getChainState(walletResult) ?? {};
   }
-  const deviceState = getDeviceState();
+
+  const deviceState = getDeviceState(walletResult);
+
   let eventData = {
     tracker: {
       eventTracker: eventTracker,
@@ -281,30 +462,30 @@ async function logUserLanded(href: string | null = null) {
     device: deviceState,
     ...chainState
   }
-
-  if (!checkShouldLogLanded(wallet ?? "", eventData.tracker.path)) {
-    console.log("PF >>> Ignoring USER_LANDED event. Message already logged.");
-    return;
+  if (checkShouldLogLanded(walletResult?.wallet ?? "", eventData.tracker.path)) {
+    console.log("PF >>> Built USER_LANDED event", eventData);
+    console.log("PF >>> Notifying gql server...");
+    storeNewLandedEvent(walletResult?.wallet ?? "", eventData.tracker.path);
+    const response = await gqlClient.request(CreateUserLandedEvent, {
+      event: eventData
+    });
+    console.log("PF >>> Server notified. Response: ", response);
   }
-
-  console.log("PF >>> Built USER_LANDED event", eventData);
-  console.log("PF >>> Notifying gql server...");
-  storeNewLandedEvent(wallet, eventData.tracker.path);
-  const response = await gqlClient.request(CreateUserLandedEvent, {
-    event: eventData
-  });
-  console.log("PF >>> Server notified. Response: ", response);
 }
 
-async function logWalletConnect(wallets: any) {
-  console.log("PF >>> Logging WALLET_CONNECT event for wallets", wallets);
+async function logWalletConnect(walletResult: WalletResponse) {
+  console.log("PF >>> Logging WALLET_CONNECT event for wallet response", walletResult);
   const eventTracker: EventTracker = 'WALLET_CONNECT';
-  const wallet = wallets[0];
   const userId = getUserId();
+  console.log("PF >>> userId", userId);
   const sessionId = getSessionId();
+  console.log("PF >>> sessionId", sessionId);
   const utmParams = getUtmParams();
-  const chainState = await getChainState(wallet);
-  const deviceState = getDeviceState();
+  console.log("PF >>> utmParams", utmParams);
+  const chainState = await getChainState(walletResult);
+  console.log("PF >>> chainState", chainState);
+  const deviceState = getDeviceState(walletResult);
+  console.log("PF >>> deviceState", deviceState);
   let eventData = {
     tracker: {
       eventTracker: eventTracker,
@@ -346,21 +527,18 @@ interface TxInfo {
   s: string,
   hash: string
 }
-async function logSendTransaction(tx: Tx, result: any) {
+async function logSendTransaction(tx: Tx, result: any, walletResult: WalletResponse) {
   console.log("PF >>> Logging TX_REQUEST event.");
   console.log("PF >>> Tx Data: ", tx);
   console.log("PF >>> Tx Send Result: ", result);
   const eventTracker: EventTracker = 'TX_REQUEST'; 
-  const wallet = tx.from;
   const userId = getUserId();
   const sessionId = getSessionId();
   const utmParams = getUtmParams();
-  const chainState = await getChainState(wallet);
-  const deviceState = getDeviceState();
+  const chainState = await getChainState(walletResult);
+  const deviceState = getDeviceState(walletResult);
   const txHash = result as string;
-  const provider = getProvider();
-  if (!provider) { return; }
-  const fetchedTxInfo: TxInfo = await provider.request(
+  const fetchedTxInfo: TxInfo = await walletResult.provider.request(
     { method: 'eth_getTransactionByHash', params: [ txHash ] }
   );
   const maxFeePerGas = fetchedTxInfo.maxFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
@@ -402,7 +580,7 @@ async function logSendTransaction(tx: Tx, result: any) {
   });
   console.log("PF >>> Server notified. Response: ", response);
   
-  const receipt = await waitMined(eventData);
+  const receipt = await waitMined(eventData, walletResult.provider);
   console.log("PF >>> receipt: ", receipt);
   if (receipt) {
     console.log("PF >>> Notifying gql server about transaction status update...");
@@ -460,20 +638,72 @@ function storeNewLandedEvent(wallet: string | null, path: string) {
   sessionStorage.setItem(PF_LAST_USER_LANDED_PATH_KEY, path);
 }
 
-async function fetchWallet(): Promise<string | null> {
-  console.log("PF >>> Trying to fetch wallet");
-  const provider = getProvider();
-  if (provider) {
+interface WCObject {
+  connected: boolean,
+  accounts: string[],
+  chainId: number,
+  bridge: string,
+  key: string,
+  clientId: string,
+  clientMeta: {
+    name: string,
+    description: string,
+    url: string,
+    icons: string[]
+  },
+  peerId: string,
+  peerMeta: {
+    name: string,
+    description: string,
+    url: string,
+    icons: string[]
+  },
+  handshakeId: number,
+  handshakeTopic: string
+}
+function fetchWcObjet() {
+  console.log("PF >>> fetching wc object");
+  const wc = localStorage.getItem('walletconnect');
+  if (wc) {
+    console.log("PF >>> fetched wc object", wc);
+    wcObject = JSON.parse(wc);
+    console.log("PF >>> parsed wc object", wcObject);
+  } else {
+    console.log("PF >>> failed to fetch wc object. Wc: ", wc);
+  }
+}
+
+interface WalletResponse {
+  type: ProviderType,
+  provider: any,
+  wallet: string
+}
+async function fetchWallet(): Promise<WalletResponse | null> {
+  const providerResult = await getProvider();
+  if (providerResult) {
+    if (providerResult.type === "walletconnect") {
+      if (wcObject?.accounts[0]) {
+        return {
+          type: providerResult.type,
+          wallet: wcObject?.accounts[0],
+          provider: providerResult.provider
+        }
+      } else { return null; }
+    }
     console.log("PF >>> Calling eth_accounts...");
-    const accounts = await provider.request(
+    const accounts = await providerResult.provider.request(
       { method: 'eth_accounts' }
     );
     console.log("PF >>> eth_accounts result: ", accounts);
     if (accounts && accounts.length > 0) {
       const wallet = accounts[0];
-      return wallet;
+      return {
+        type: providerResult.type,
+        wallet: wallet,
+        provider: providerResult.provider
+      };
     } else { return null; }
-  } else { // TODO: - fetch WalletConnect bridge & api
+  } else {
     return null;
   }
 }
@@ -491,36 +721,46 @@ interface ChainState {
     gasPrice: string
   }
 }
-async function getChainState(walletAddress: string): Promise<ChainState | null> {
-  const provider = getProvider();
-  if (!provider) { return null; }
-  const gasBalance = 
-    BigNumber.from((
-      await provider.request(
-        {
-          method: 'eth_getBalance',
-          params: [ walletAddress, 'latest' ]
-        }
-      )
-    )).toString();
-  const nonce =
-    BigNumber.from(
-      await provider.request(
-        {
-          method: 'eth_getTransactionCount',
-          params: [ walletAddress, 'latest' ]
-        }
-      )
-    ).toString();
-  const networkId = BigNumber.from(await provider.request({method: 'eth_chainId'})).toNumber();
+async function getChainState(walletResult: WalletResponse): Promise<ChainState | null> {
+  const provider = walletResult.provider;
+  
+  
+  const getBalanceResponse = await provider.request(
+    {
+      method: 'eth_getBalance',
+      params: [ walletResult.wallet, 'latest' ]
+    }
+  );
+  console.log("PF >>> getBalanceResponse", getBalanceResponse);
+  const gasBalance = BigNumber.from(getBalanceResponse).toString();
+  
+  const nonceResponse = await provider.request(
+    {
+      method: 'eth_getTransactionCount',
+      params: [ walletResult.wallet, 'latest' ]
+    }
+  ); 
+  console.log("PF >>> nonceResponse", nonceResponse);
+  const nonce = BigNumber.from(nonceResponse).toString();
+  
+  const networkIdResponse = await provider.request({method: 'eth_chainId'});
+  console.log("PF >>> chainIdResponse", networkIdResponse);
+  const networkId = BigNumber.from(networkIdResponse).toNumber();
+  
+  const blockHeightResponse = await provider.request(
+    { method: 'eth_blockNumber' }
+  );
+  console.log("PF >>> blockHeightResponse", blockHeightResponse);
   const blockHeight = 
-    BigNumber.from(await provider.request(
-      { method: 'eth_blockNumber' }
-    )).toString();
-  const gasPrice = BigNumber.from(await provider.request({method: 'eth_gasPrice'})).toString();
+    BigNumber.from(blockHeightResponse).toString();
+
+  const gasPriceResponse = await provider.request({method: 'eth_gasPrice'});
+  console.log("PF >>> gasPriceResponse", gasPriceResponse);
+  const gasPrice = BigNumber.from(gasPriceResponse).toString();
+  
   const chainState = {
     wallet: {
-      walletAddress: walletAddress,
+      walletAddress: walletResult.wallet,
       gasBalance: gasBalance,
       nonce: nonce,
       networkId: networkId
@@ -575,10 +815,10 @@ interface DeviceState {
   walletProvider: string
 }
 
-function getDeviceState(): DeviceState {
+function getDeviceState(walletResult?: (WalletResponse | null)): DeviceState {
   const userAgent = window.navigator.userAgent;
   const deviceState = deviceDetector.parse(userAgent);
-  const walletProvider = getProviderName();
+  const walletProvider = getProviderName(walletResult);
   
   let userCountry = "unknown";
   if (Intl) {
@@ -600,22 +840,23 @@ function getDeviceState(): DeviceState {
 }
 
 type ProviderName = 
-                'metamask'    | 
-                'trust'       | 
-                'goWallet'    |
-                'alphaWallet' | 
-                'status'      |
-                'coinbase'    |
-                'cipher'      |
-                'mist'        |
-                'parity'      |
-                'infura'      |
-                'localhost'   |
+                'metamask'      | 
+                'trust'         | 
+                'goWallet'      |
+                'alphaWallet'   |  
+                'status'        |
+                'coinbase'      |
+                'cipher'        |
+                'mist'          |
+                'parity'        |
+                'infura'        |
+                'localhost'     |
+                'walletconnect' |
                 'unknown';
-function getProviderName(): ProviderName {
-  const fetchedProvider = getProvider();
-  if (!fetchedProvider) return 'unknown';
-
+function getProviderName(walletResult?: WalletResponse | null): ProviderName {
+  if (!walletResult) return 'unknown';
+  if (walletResult.type === 'walletconnect') { return 'walletconnect'; }
+  const fetchedProvider = walletResult.provider;
   if (fetchedProvider.isMetaMask)
       return 'metamask';
 
@@ -652,16 +893,71 @@ function getProviderName(): ProviderName {
   return 'unknown';
 }
 
-function getProvider() {
+type ProviderType = "metamask" | "walletconnect";
+interface ProviderResult {
+  type: ProviderType,
+  provider: any
+}
+async function getProvider(): Promise<ProviderResult | null> {
   console.log("PF >>> getProvider() call");
+
+  if (wcObject) {
+    return {
+      type: "walletconnect",
+      provider: await wcObjectToWeb3Provider(wcObject)
+    }
+  }
+  
   if ((window as any).ethereum) {
-    return (window as any).ethereum;
+    console.log("PF >>> Detected window.ethereum provider...")
+    return {
+      type: "metamask",
+      provider: (window as any).ethereum
+    };
   } else if ((window as any).web3 && (window as any).web3.currentProvider) {
-    return (window as any).web3.currentProvider;
+    console.log("PF >>> Detected window.web3.currentProvider provider...")
+    return {
+      type: "metamask",
+      provider: (window as any).web3.currentProvider
+    }
   } else {
     console.log("PF >>> Missing provider!");
     return null;
   }
+}
+
+async function wcObjectToWeb3Provider(wcObject: WCObject): Promise<any> {
+  console.log("PF >> wc object to web3 provider")
+  const rpcsMap = new Map<number, string>([
+    [1, "https://eth.llamarpc.com"],
+    [5, "https://endpoints.omniatech.io/v1/eth/goerli/public"],
+    [10, "https://endpoints.omniatech.io/v1/op/mainnet/public"],
+    [25, "https://cronos-evm.publicnode.com"],
+    [56, "https://bsc.publicnode.com"],
+    [100, "https://rpc.gnosischain.com"],
+    [137, "https://polygon.llamarpc.com"],
+    [250, "https://fantom.publicnode.com"],
+    [420, "https://goerli.optimism.io"],
+    [1284, "https://moonbeam.public.blastapi.io"],
+    [1285, "https://rpc.api.moonriver.moonbeam.network"],
+    [2222, "https://evm.kava.io"],
+    [4002, "https://rpc.testnet.fantom.network/"],
+    [7700, "https://canto.neobase.one"],
+    [8217, "https://public-node-api.klaytnapi.com/v1/cypress"],
+    [42161, "https://endpoints.omniatech.io/v1/arbitrum/one/public"],
+    [42170, "https://nova.arbitrum.io/rpc"],
+    [42220, "https://forno.celo.org"],
+    [43114, "https://avalanche-c-chain.publicnode.com"],
+    [80001, "https://endpoints.omniatech.io/v1/matic/mumbai/public"],
+    [421613, "https://goerli-rollup.arbitrum.io/rpc"],
+    [11155111, "https://rpc.sepolia.dev"],
+    [1313161554, "https://endpoints.omniatech.io/v1/aurora/mainnet/public"]
+  ]);
+  const chainId = wcObject.chainId;
+  const rpc = rpcsMap.get(chainId);
+  if (!rpc) { return null; }
+  const provider = new Web3HttpProvider(rpc);
+  return provider;
 }
 
 enum TxStatus {
@@ -673,22 +969,25 @@ interface TxReceipt {
   blockNumber: string,
   status?: TxStatus
 }
-async function waitMined(eventData: any, retries: number = 50, pollIntervalSeconds: number = 5): Promise<TxReceipt | null> {
+async function waitMined(
+  eventData: any,
+  provider: any,
+  retries: number = 50,
+  pollIntervalSeconds: number = 5
+): Promise<TxReceipt | null> {
   const txHash = eventData.tx.hash;
-  const gasLimit = eventData.tx.gas; 
-  console.log(`PF >>> Waiting tx minded for hash ${txHash} and gas limit: ${gasLimit}`);
-  const provider = getProvider();
+  console.log(`PF >>> Waiting tx minded for hash ${txHash}`);
   let attempts = 0;
   while(attempts < retries) {
     console.log(`PF >>> Attempt ${attempts} to fetch the receipt...`);
     const receipt = await provider.request({method: "eth_getTransactionReceipt", params: [txHash]});
     console.log(`PF >>> Receipt fetched: `, receipt);
     if (receipt && receipt.blockNumber) {
-      const gasUsed = BigNumber.from(receipt.gasUsed).toString();
-      console.log(`PF >>> Transaction included in block ${receipt.blockNumber}. Transaction consumed ${gasUsed}/${gasLimit} gas!`);
+      const status = receipt.status;
+      console.log(`PF >>> Transaction included in block ${receipt.blockNumber}. Transaction status is ${status}!`);
       return {
         blockNumber: receipt.blockNumber,
-        status: (gasLimit === gasUsed) ? TxStatus.FAILURE : TxStatus.SUCCESS
+        status: (status === "0x0") ? TxStatus.FAILURE : TxStatus.SUCCESS
       }
     }
     await sleep(pollIntervalSeconds * 1000);

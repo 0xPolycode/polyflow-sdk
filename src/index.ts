@@ -1,1 +1,1 @@
-export { attach } from './core/middleware/provider';
+export { attach, initializeWsProxy } from './core/middleware/provider';
