@@ -412,13 +412,9 @@ async function logErrors(errors: string[]) {
   const walletsList = await fetchWallet();
 
   const events = [];
-  for (let i = 0; i < walletsList.length; i++) {
-    const walletResult = walletsList[i];
-    let chainState = {};
-    if (walletResult) {
-      chainState = await getChainState(walletResult) ?? {};
-    }
-    const deviceState = getDeviceState(walletResult);
+  if (walletsList.length === 0) {
+    const chainState = {};
+    const deviceState = getDeviceState(null);
     let eventData = {
       tracker: {
         eventTracker: eventTracker,
@@ -434,6 +430,27 @@ async function logErrors(errors: string[]) {
     }
     pfLog("PF >>> Built GENERIC_ERROR event", eventData);
     events.push(eventData);
+  } else {
+    for (let i = 0; i < walletsList.length; i++) {
+      const walletResult = walletsList[i];
+      let chainState = await getChainState(walletResult) ?? {};
+      const deviceState = getDeviceState(walletResult);
+      let eventData = {
+        tracker: {
+          eventTracker: eventTracker,
+          userId: userId,
+          sessionId: sessionId,
+          origin: location.hostname,
+          path: location.pathname,
+          ...utmParams
+        },
+        device: deviceState,
+        ...chainState,
+        errors: errors
+      }
+      pfLog("PF >>> Built GENERIC_ERROR event", eventData);
+      events.push(eventData);
+    }
   }
 
   storeNewErrorEvent(errors);
@@ -455,14 +472,10 @@ async function logUserLanded(href: string | null = null) {
 
   const walletsList = await fetchWallet();
   let events = [];
-  for (let i = 0; i < walletsList.length; i++) {
-    const walletResult = walletsList[i];
-    let chainState = {};
-    if (walletResult) {
-      chainState = await getChainState(walletResult) ?? {};
-    }
-  
-    const deviceState = getDeviceState(walletResult);
+
+  if (walletsList.length === 0) {
+    const chainState = {};
+    const deviceState = getDeviceState(null);
     let eventData = {
       tracker: {
         eventTracker: eventTracker,
@@ -477,8 +490,28 @@ async function logUserLanded(href: string | null = null) {
     }
     pfLog("PF >>> Built USER_LANDED event", eventData);
     events.push(eventData);
+  } else {
+    for (let i = 0; i < walletsList.length; i++) {
+      const walletResult = walletsList[i];
+      let chainState = await getChainState(walletResult) ?? {};;
+      const deviceState = getDeviceState(walletResult);
+      let eventData = {
+        tracker: {
+          eventTracker: eventTracker,
+          userId: userId,
+          sessionId: sessionId,
+          origin: location.hostname,
+          path: href ?? (location.pathname+location.search),
+          ...utmParams
+        },
+        device: deviceState,
+        ...chainState
+      }
+      pfLog("PF >>> Built USER_LANDED event", eventData);
+      events.push(eventData);
+    }
   }
-
+  
   const paths = events.map(e => e.tracker.path).join(",");
   const wallets = events.map((e: any) => {
     if (e.wallet && e.wallet.walletAddress) {
