@@ -87,7 +87,6 @@ enum Environment {
   STAGING = "https://backend-staging.polyflow.dev/api/graphql",
   PROD = "https://backend-prod.polyflow.dev/api/graphql" 
 }
-let ENV: Environment = Environment.STAGING;
 let LOG_ENABLED: boolean = false;
 
 function pfLog(...args: any[]) { if (LOG_ENABLED) { console.log(...args); } }
@@ -95,11 +94,13 @@ function pfLog(...args: any[]) { if (LOG_ENABLED) { console.log(...args); } }
 let wcObject: WCObject | null = null;
 
 interface AttachOptions {
-  logEnabled?: boolean
+  logEnabled?: boolean,
+  gqlApi?: string
 }
-export function attach(apiKey: string, options?: AttachOptions) {
+export function attach(apiKey: string, options?: AttachOptions) {  
+  const gqlApi = options ? (options.gqlApi ? options.gqlApi : Environment.PROD) : Environment.PROD; 
   gqlClient = new AwesomeGraphQLClient({
-    endpoint: ENV,
+    endpoint: gqlApi,
     fetchOptions: {
       headers: {
         'X-API-KEY': apiKey
