@@ -25,9 +25,8 @@ class Web3HttpProvider extends HttpProvider {
 const PF_SDK_SESSION_KEY = 'PF_SDK_SESSION_KEY';
 const PF_SDK_USER_KEY = 'PF_SDK_USER_KEY';
 const PF_SDK_UTM_KEY = 'PF_SDK_UTM_KEY';
-const PF_LAST_ERROR_LOGGED_KEY = "PF_LAST_ERROR_LOGGED_KEY";
-const PF_LAST_USER_LANDED_WALLET_KEY = "PF_LAST_USER_LANDED_WALLET_KEY";
-const PF_LAST_USER_LANDED_PATH_KEY = "PF_LAST_USER_LANDED_PATH_KEY";
+const PF_EVENTS_HASH_MAP = "PF_EVENTS_HASH_MAP";
+const MIN_TIME_DIFF_FOR_EVENT_LOG_MS = 1000;
 
 type EventTracker = 'WALLET_CONNECT' | 'USER_LANDED' | 'TX_REQUEST' | 'GENERIC_ERROR';
 
@@ -85,7 +84,7 @@ let gqlClient: AwesomeGraphQLClient;
 
 enum Environment {
   STAGING = "https://backend-staging.polyflow.dev/api/graphql",
-  PROD = "https://backend-prod.polyflow.dev/api/graphql" 
+  PROD = "https://backend-prod.polyflow.dev/api/graphql"
 }
 let LOG_ENABLED: boolean = false;
 
@@ -95,10 +94,19 @@ let wcObject: WCObject | null = null;
 
 interface AttachOptions {
   logEnabled?: boolean,
+  stagingModeEnabled?: boolean,
   gqlApi?: string
 }
-export function attach(apiKey: string, options?: AttachOptions) {  
-  const gqlApi = options ? (options.gqlApi ? options.gqlApi : Environment.PROD) : Environment.PROD; 
+export function attach(apiKey: string, options?: AttachOptions) {
+  let gqlApi: string = Environment.PROD;
+  if (options) {
+    if (options.gqlApi) {
+      gqlApi = options.gqlApi;
+    } else {
+      if (options.stagingModeEnabled === true) { gqlApi = Environment.STAGING; }
+    }
+  }
+
   gqlClient = new AwesomeGraphQLClient({
     endpoint: gqlApi,
     fetchOptions: {
@@ -173,7 +181,7 @@ export function initializeWsProxy() {
           logSendTransaction(txData, hash, {
             provider: await wcObjectToWeb3Provider(wcObject),
             type: 'walletconnect',
-            wallet: txData.from,
+            wallet: txData.from.toLowerCase(),
             walletProvider: wcObject.peerMeta.name.toLowerCase()
           });
         } else { pfLog("PF >>> Payload is not a response to eth_sendTransaction message..."); }
@@ -284,14 +292,14 @@ const handler = {
             logWalletConnect({
               provider: (window as any).ethereum,
               type: 'injected',
-              wallet: result[0],
+              wallet: result[0].toLowerCase(),
               walletProvider: getProviderNameForMetamask()
             });
           } else if (method === 'eth_sendTransaction') {
             logSendTransaction(params[0], result, {
               provider: (window as any).ethereum,
               type: 'injected',
-              wallet: params[0].from,
+              wallet: params[0].from.toLowerCase(),
               walletProvider: getProviderNameForMetamask()
             });
           } else  if (method === 'eth_sendSignedTransaction') {
@@ -310,7 +318,7 @@ const accountsChangedListener = (accounts: string[]) => {
   logWalletConnect({
     provider: (window as any).ethereum,
     type: 'injected',
-    wallet: accounts[0],
+    wallet: accounts[0].toLowerCase(),
     walletProvider: getProviderNameForMetamask()
   });
 }
@@ -373,7 +381,7 @@ function addLocalStorageListener() {
         logWalletConnect({
           provider: provider,
           type: 'walletconnect',
-          wallet: wcObject.accounts[0],
+          wallet: wcObject.accounts[0].toLowerCase(),
           walletProvider: wcObject.peerMeta.name.toLowerCase()
         });
       }
@@ -402,15 +410,12 @@ async function errorHandler(errorMsg: any, url: any, lineNo: any, columnNo: any,
 
 async function logErrors(errors: string[]) {
   pfLog("PF >>> Logging GENERIC_ERROR event");
-  if (!checkShouldLogError(errors)) {
-    pfLog("PF >>> Ignoring GENERIC_ERROR event. Message already logged.");
-    return;
-  }
   const eventTracker: EventTracker = 'GENERIC_ERROR';
   const userId = getUserId();
   const sessionId = getSessionId();
   const utmParams = getUtmParams();
   const walletsList = await fetchWallet();
+  const urlParts = splitPathAndQuery(location.pathname);
 
   const events = [];
   if (walletsList.length === 0) {
@@ -422,7 +427,8 @@ async function logErrors(errors: string[]) {
         userId: userId,
         sessionId: sessionId,
         origin: location.hostname,
-        path: location.pathname,
+        path: urlParts.path,
+        query: urlParts.query,
         ...utmParams
       },
       device: deviceState,
@@ -442,7 +448,8 @@ async function logErrors(errors: string[]) {
           userId: userId,
           sessionId: sessionId,
           origin: location.hostname,
-          path: location.pathname,
+          path: urlParts.path,
+          query: urlParts.query,
           ...utmParams
         },
         device: deviceState,
@@ -454,13 +461,14 @@ async function logErrors(errors: string[]) {
     }
   }
 
-  storeNewErrorEvent(errors);
   for (let i = 0; i < events.length; i++) {
-    pfLog("PF >>> Notifying gql server...");
-    const response = await gqlClient.request(CreateErrorEvent, {
-      event: events[i]
-    });
-    pfLog("PF >>> Server notified. Response: ", response);
+    if (checkShouldLogEvent(events[i])) {
+      pfLog("PF >>> Notifying gql server...");
+      const response = await gqlClient.request(CreateErrorEvent, {
+        event: events[i]
+      });
+      pfLog("PF >>> Server notified. Response: ", response);
+    }
   }
 }
 
@@ -470,7 +478,7 @@ async function logUserLanded(href: string | null = null) {
   const userId = getUserId();
   const sessionId = getSessionId();
   const utmParams = getUtmParams();
-
+  const urlParts = splitPathAndQuery(href ?? (location.pathname+location.search));
   const walletsList = await fetchWallet();
   let events = [];
 
@@ -483,7 +491,8 @@ async function logUserLanded(href: string | null = null) {
         userId: userId,
         sessionId: sessionId,
         origin: location.hostname,
-        path: href ?? (location.pathname+location.search),
+        path: urlParts.path,
+        query: urlParts.query,
         ...utmParams
       },
       device: deviceState,
@@ -502,7 +511,8 @@ async function logUserLanded(href: string | null = null) {
           userId: userId,
           sessionId: sessionId,
           origin: location.hostname,
-          path: href ?? (location.pathname+location.search),
+          path: urlParts.path,
+          query: urlParts.query,
           ...utmParams
         },
         device: deviceState,
@@ -512,16 +522,9 @@ async function logUserLanded(href: string | null = null) {
       events.push(eventData);
     }
   }
-  
-  const paths = events.map(e => e.tracker.path).join(",");
-  const wallets = events.map((e: any) => {
-    if (e.wallet && e.wallet.walletAddress) {
-      return e.wallet.walletAddress
-    } else { return ""; }
-  }).join(",");
-  if (checkShouldLogLanded(wallets, paths)) {
-    storeNewLandedEvent(wallets, paths);
-    for (let i = 0; i < events.length; i++) {
+
+  for (let i = 0; i < events.length; i++) {
+    if (checkShouldLogEvent(events[i])) {
       pfLog("PF >>> Notifying gql server...");
       const response = await gqlClient.request(CreateUserLandedEvent, {
         event: events[i]
@@ -544,24 +547,29 @@ async function logWalletConnect(walletResult: WalletResponse) {
   pfLog("PF >>> chainState", chainState);
   const deviceState = getDeviceState(walletResult);
   pfLog("PF >>> deviceState", deviceState);
+  const urlParts = splitPathAndQuery(location.pathname);  
   let eventData = {
     tracker: {
       eventTracker: eventTracker,
       userId: userId,
       sessionId: sessionId,
       origin: location.hostname,
-      path: location.pathname,
+      path: urlParts.path,
+      query: urlParts.query,
       ...utmParams
     },
     device: deviceState,
     ...chainState
   }
+
   pfLog("PF >>> Built WALLET_CONNECT event", eventData);
-  pfLog("PF >>> Notifying gql server...");
-  const response = await gqlClient.request(CreateWalletConnectedEvent, {
-    event: eventData
-  });
-  pfLog("PF >>> Server notified. Response: ", response);
+  if (checkShouldLogEvent(eventData)) {
+    pfLog("PF >>> Notifying gql server...");
+    const response = await gqlClient.request(CreateWalletConnectedEvent, {
+      event: eventData
+    });
+    pfLog("PF >>> Server notified. Response: ", response);
+  }
 }
 
 interface Tx {
@@ -602,14 +610,15 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
   const maxFeePerGas = fetchedTxInfo.maxFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
   const maxPriorityFeePerGas = 
     fetchedTxInfo.maxPriorityFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
-  
+  const urlParts = splitPathAndQuery(location.pathname);
   let eventData = {
     tracker: {
       eventTracker: eventTracker,
       userId: userId,
       sessionId: sessionId,
       origin: location.hostname,
-      path: location.pathname,
+      path: urlParts.path,
+      query: urlParts.query,
       ...utmParams
     },
     device: deviceState,
@@ -632,21 +641,23 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
     }
   }
   pfLog("PF >>> Built TX_REQUEST event", eventData);
-  pfLog("PF >>> Notifying gql server...");
-  const response = await gqlClient.request(CreateTxRequestEvent, {
-    event: eventData
-  });
-  pfLog("PF >>> Server notified. Response: ", response);
-  
-  const receipt = await waitMined(eventData, walletResult.provider);
-  pfLog("PF >>> receipt: ", receipt);
-  if (receipt) {
-    pfLog("PF >>> Notifying gql server about transaction status update...");
-    const updateResponse = await gqlClient.request(UpdateTxRequestEventTxStatus, {
-      id: response.createTxRequestEvent.id,
-      newStatus: receipt.status
+  if (checkShouldLogEvent(eventData)) {
+    pfLog("PF >>> Notifying gql server...");
+    const response = await gqlClient.request(CreateTxRequestEvent, {
+      event: eventData
     });
-    pfLog("PF >>> Server notified about transaction status update. Response: ", updateResponse);
+    pfLog("PF >>> Server notified. Response: ", response);
+    
+    const receipt = await waitMined(eventData, walletResult.provider);
+    pfLog("PF >>> receipt: ", receipt);
+    if (receipt) {
+      pfLog("PF >>> Notifying gql server about transaction status update...");
+      const updateResponse = await gqlClient.request(UpdateTxRequestEventTxStatus, {
+        id: response.createTxRequestEvent.id,
+        newStatus: receipt.status
+      });
+      pfLog("PF >>> Server notified about transaction status update. Response: ", updateResponse);
+    }    
   }
 }
 
@@ -670,30 +681,6 @@ function getSessionId(): string {
     sessionStorage.setItem(PF_SDK_SESSION_KEY, sessionId);
     return sessionId;
   } 
-}
-
-function checkShouldLogError(errors: string[]): boolean {
-  const lastLoggedErrorsStringified = sessionStorage.getItem(PF_LAST_ERROR_LOGGED_KEY) ?? "";
-  const newErrorsStringified = JSON.stringify(errors);
-  
-  return newErrorsStringified != lastLoggedErrorsStringified;
-}
-function storeNewErrorEvent(errors: string[]) {
-  sessionStorage.setItem(
-    PF_LAST_ERROR_LOGGED_KEY,
-    JSON.stringify(errors)
-  );
-}
-
-function checkShouldLogLanded(wallets: string, paths: string): boolean {
-  const lastLoggedUserLandedWallet = sessionStorage.getItem(PF_LAST_USER_LANDED_WALLET_KEY) ?? "";
-  const lastLoggedUserLandedPath = sessionStorage.getItem(PF_LAST_USER_LANDED_PATH_KEY) ?? "";
-  
-  return (wallets != lastLoggedUserLandedWallet || paths != lastLoggedUserLandedPath);
-}
-function storeNewLandedEvent(wallets: string, paths: string) {
-  sessionStorage.setItem(PF_LAST_USER_LANDED_WALLET_KEY, wallets);
-  sessionStorage.setItem(PF_LAST_USER_LANDED_PATH_KEY, paths);
 }
 
 interface WCObject {
@@ -747,7 +734,7 @@ async function fetchWallet(): Promise<WalletResponse[]> {
       if (!wcObject) continue;
       result.push({
         type: p.type,
-        wallet: wcObject.accounts[0],
+        wallet: wcObject.accounts[0].toLowerCase(),
         walletProvider: wcObject.peerMeta.name.toLowerCase(),
         provider: p.provider
       })
@@ -758,7 +745,7 @@ async function fetchWallet(): Promise<WalletResponse[]> {
       if (!accounts || accounts.length === 0) { continue; }
       result.push({
         type: p.type,
-        wallet: accounts[0],
+        wallet: accounts[0].toLowerCase(),
         walletProvider: getProviderNameForMetamask(),
         provider: p.provider
       });
@@ -929,7 +916,7 @@ function getProviderNameForMetamask(): ProviderName {
   return 'unknown';
 }
 
-type ProviderType = "injected" | "walletconnect";
+type ProviderType = "injected" | "walletconnect"; // add more providers (dev3 widget, magic link, web3auth, ...)
 interface ProviderResult {
   type: ProviderType,
   provider: any
@@ -1038,4 +1025,67 @@ async function waitMined(
 
 async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+interface PathAndQuery {
+  path?: string,
+  query?: string
+}
+function splitPathAndQuery(text?: string): PathAndQuery {
+  const splitted = (text ?? "").split("?");
+  if (splitted.length === 0) { return {}; }
+  else if (splitted.length === 1) { return { path: splitted[0] }; }
+  else { return { path: splitted[0], query: splitted[1] }; }
+}
+// function removeQuery(text?: string) {
+// 	return (text ?? "").split("?")[0];
+// }
+
+function checkShouldLogEvent(event: any): boolean {
+  const eventHash = hashEvent(event);
+  pfLog("PF >>> Check should log event, for event hash: ", eventHash);
+  const hashMap = loadMap();
+  const currentTimestamp = Date.now();
+  const previousTimestamp = hashMap.get(eventHash);
+  
+  let shouldBeLogged = true;
+  if (previousTimestamp) {
+    const timeDifference = currentTimestamp - previousTimestamp;
+    pfLog("PF >>> Previous timestamp found. Time difference (in ms): ", timeDifference);
+    if (timeDifference < MIN_TIME_DIFF_FOR_EVENT_LOG_MS) {
+      pfLog(`PF >>> Time difference < ${MIN_TIME_DIFF_FOR_EVENT_LOG_MS}ms. Event should be logged: false`);
+      shouldBeLogged = false;
+    }
+  }
+
+  storeEvent(eventHash, currentTimestamp);
+  return shouldBeLogged;
+}
+
+function storeEvent(eventHash: string, timestamp: number) {
+	const hashMap = loadMap();
+	hashMap.set(eventHash, timestamp);
+  storeMap(hashMap);
+}
+
+function loadMap(): Map<string, number> {
+  const storedHashMapString = localStorage.getItem(PF_EVENTS_HASH_MAP);
+	const storedHashMap = JSON.parse(storedHashMapString ?? "[]");
+  const hashMap = new Map<string, number>(storedHashMap);
+  return hashMap;
+}
+
+function storeMap(hashMap: Map<string, number>) {
+	  localStorage.setItem(PF_EVENTS_HASH_MAP, JSON.stringify([...hashMap]));
+}
+
+function hashEvent(event: any) {
+  const data = JSON.stringify(event);
+  let hash = 0;
+  for (let i = 0, len = data.length; i < len; i++) {
+      let chr = data.charCodeAt(i);
+      hash = (hash << 5) - hash + chr;
+      hash |= 0; // Convert to 32bit integer
+  }
+  return hash.toString();
 }

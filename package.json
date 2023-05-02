@@ -38,7 +38,6 @@
     "@walletconnect/crypto": "^1.0.3",
     "@walletconnect/utils": "^2.7.0",
     "awesome-graphql-client": "^0.13.0",
-    "crypto-js": "^4.1.1",
     "iso-crypto": "^1.1.0",
     "ua-parser-js": "^1.0.35",
     "web3-providers-http": "^1.9.0"
