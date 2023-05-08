@@ -6,6 +6,7 @@ import * as timeZoneCityToCountry from "../localization/tz-cities-to-countries.j
 import HttpProvider from 'web3-providers-http';
 import { JsonRpcResponse } from 'web3-core-helpers';
 import uaParser from 'ua-parser-js';
+import { aes256gcmDecrypt } from '../util/aes256gcm';
 
 class Web3HttpProvider extends HttpProvider {
   async request(payload: any): Promise<JsonRpcResponse | null> {
@@ -91,6 +92,7 @@ let LOG_ENABLED: boolean = false;
 function pfLog(...args: any[]) { if (LOG_ENABLED) { console.log(...args); } }
 
 let wcObject: WCObject | null = null;
+let cbObject: CbObject | null = null;
 
 interface AttachOptions {
   logEnabled?: boolean,
@@ -119,7 +121,8 @@ export function attach(apiKey: string, options?: AttachOptions) {
   LOG_ENABLED = options ? (options.logEnabled === true) : false;
 
   storeUtmParams();
-  fetchWcObjet();
+  fetchWcObject();
+  fetchCbObject();
   addUrlChangeListener();
   addLocalStorageListener();
   initializeProviderProxy();
@@ -152,18 +155,17 @@ export function initializeWsProxy() {
     // incoming messages
     ws.addEventListener("message", async (e: any) => {
       pfLog("PF >>> Intercepted incoming ws message", e.data);
-      if (!wcObject) {
-        pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", e.data);
-        return;
-      }
       const messageObj = JSON.parse(e.data);
       if (!messageObj) {
         pfLog("PF >>> Could not parse ws message. Giving up on processing ws message: ", e.data);
         return;
       }
-
       pfLog("PF >>> Parsed ws message to object: ", messageObj);
-      if (messageObj.payload && messageObj.topic === wcObject.clientId) {
+      if (messageObj.payload && messageObj.topic === wcObject?.clientId) {
+        if (!wcObject) {
+          pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", e.data);
+          return;
+        }
         pfLog("PF >>> Message is a walletconnect message");
         const payload = JSON.parse(messageObj.payload);
         if (!payload) { 
@@ -179,23 +181,40 @@ export function initializeWsProxy() {
           const txData = wsMessages.get(decrypted.id);
           pfLog("PF >>> Transaction data: ", txData);
           logSendTransaction(txData, hash, {
-            provider: await wcObjectToWeb3Provider(wcObject),
+            provider: await chainIdToWeb3Provider(wcObject.chainId),
             type: 'walletconnect',
             wallet: txData.from.toLowerCase(),
             walletProvider: wcObject.peerMeta.name.toLowerCase()
           });
         } else { pfLog("PF >>> Payload is not a response to eth_sendTransaction message..."); }
-      } else { pfLog("PF >>> Message is not a walletconnect message"); }
+      } else if (messageObj.type === "Event" && messageObj.event === "Web3Response" && messageObj.data) {
+        pfLog("PF >>> Message is a coinbase message");
+        if (!cbObject) {
+          pfLog("PF >>> Could not fetch cb object. Giving up on decrypting data: ", messageObj.data);
+          return;
+        }
+        const decrypted = JSON.parse(await aes256gcmDecrypt(messageObj.data, cbObject.sessionSecret));
+        pfLog("PF >>> Decrypted coinbase message: ", decrypted);
+        if (decrypted.id && wsMessages.has(decrypted.id)) {
+          pfLog("PF >>> Payload is a response to an coinbase signEthereumTransaction message with broadcast=true");
+          const hash = decrypted.response.result;
+          pfLog("PF >>> Transaction hash: ", hash);
+          const txData = wsMessages.get(decrypted.id);
+          pfLog("PF >>> Transaction data: ", txData);
+          logSendTransaction(txData, hash, {
+            provider: await chainIdToWeb3Provider(txData.chainId),
+            type: "coinbase",
+            wallet: txData.from.toLowerCase(),
+            walletProvider: "coinbase"
+          })
+        }
+      } else { pfLog("PF >>> Message not recognized!"); }
     })
 
     // outgoing messages
     const originalSend = ws.send
     const proxiedSend = function () {
       pfLog("PF >>> Intercepted outgoing ws message", arguments);
-      if (!wcObject) {
-        pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
-        return originalSend.apply(this, arguments);
-      }
       const messageObj = JSON.parse(arguments[0]);
       if (!messageObj) {
         pfLog("PF >>> Could not parse ws message. Giving up on processing ws message: ", arguments[0]);
@@ -203,8 +222,12 @@ export function initializeWsProxy() {
       }
       
       pfLog("PF >>> Parsed ws message to object: ", messageObj);
-      if (messageObj.payload && messageObj.topic === wcObject.peerId) {
+      if (messageObj.payload && messageObj.topic === wcObject?.peerId) {
         pfLog("PF >>> Message is a walletconnect message");
+        if (!wcObject) {
+          pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
+          return originalSend.apply(this, arguments);
+        }
         const payload = JSON.parse(messageObj.payload);
         if (!payload) { 
           pfLog("PF >>> Could not parse payload:", messageObj.payload);
@@ -219,6 +242,35 @@ export function initializeWsProxy() {
             wsMessages.set(decrypted.id, params);
           } else { pfLog("PF >>> Payload not eth_sendTransaction: ", decrypted); }
         })
+      } else if(messageObj.type === 'PublishEvent' && messageObj.event === 'Web3Request' && messageObj.data) {
+        pfLog("PF >>> Message is a coinbase message");
+        if (!cbObject) {
+          pfLog("PF >>> Could not fetch coinbase object. Giving up on processing coinbase message: ", messageObj.data);
+          return originalSend.apply(this, arguments);;
+        }
+        aes256gcmDecrypt(messageObj.data, cbObject.sessionSecret).then(decryptedString => {
+          const decrypted = JSON.parse(decryptedString);
+          if (decrypted.id && decrypted.type === 'WEB3_REQUEST') {
+            pfLog("PF >>> Payload is a coinbase WEB3_REQUEST request with id: ", decrypted.id);
+            const requestObj = decrypted.request;
+            if (requestObj && requestObj.method === "signEthereumTransaction") {
+              pfLog("PF >>> Payload is a coinbase WEB3_REQUEST signEthereumTransaction with params: ", requestObj.params);
+              const params = requestObj.params;
+              pfLog("PF >>> Should submit tx: ", params.shouldSubmit);
+              if (params.shouldSubmit) {
+                pfLog("PF >>> Storing tx params object");
+                wsMessages.set(decrypted.id, {
+                  from: params.fromAddress,
+                  to: params.toAddress,
+                  data: params.data,
+                  value: params.weiValue,
+                  chainId: params.chainId
+                });
+              }
+            }
+          } else { pfLog("PF >>> Payload not eth_sendTransaction: ", decrypted); }
+          pfLog("PF >>> Decrypted message: ", decrypted);
+        });
       } else { pfLog("PF >>> Message is not a walletconnect message"); }
 
       return originalSend.apply(this, arguments);
@@ -336,8 +388,6 @@ async function addProviderListeners() {
   }
 }
 
-let URL_CHANGE_LISTENER_CALL_COUNT = 0;
-
 function addUrlChangeListener() {
   // url changes listener
   let previousUrl = '';
@@ -346,8 +396,6 @@ function addUrlChangeListener() {
         pfLog("PF >>> Logging user landed from path listener");
         pfLog(`PF >>> previous_url: ${previousUrl} | new_url: ${location.href}`);
         previousUrl = location.href;
-        URL_CHANGE_LISTENER_CALL_COUNT ++;
-        pfLog("PF >>> URL_CHANGE_LISTENER_CALL_COUNT", URL_CHANGE_LISTENER_CALL_COUNT);
         const path = location.href.replace(location.origin, "");
         pfLog("PF >>> URL PATH", path);
         logUserLanded(path);
@@ -377,13 +425,31 @@ function addLocalStorageListener() {
       wcObject = JSON.parse(e.value);
       if (wcObject && wcObject.connected) {
         pfLog(`PF >>> Logging walletconnect connect event...`);
-        const provider = await wcObjectToWeb3Provider(wcObject);
+        const provider = await chainIdToWeb3Provider(wcObject.chainId);
         logWalletConnect({
           provider: provider,
           type: 'walletconnect',
           wallet: wcObject.accounts[0].toLowerCase(),
           walletProvider: wcObject.peerMeta.name.toLowerCase()
         });
+      }
+    } else if (e.key === '-walletlink:https://www.walletlink.org:Addresses') {
+      pfLog("PF >>> Key is coinbase - Addresses = ", e.value);
+      fetchCbObject(e.value);
+      if (cbObject) {
+        const oldAddressesValue = (localStorage.getItem('-walletlink:https://www.walletlink.org:Addresses') ?? "").toString();
+        const newAddressesValue = e.value.toString();
+        pfLog("PF >>> Old addresses value: ", oldAddressesValue);
+        pfLog("PF >>> New addresses value: ", newAddressesValue);
+        if (newAddressesValue.length > 0 && newAddressesValue !== oldAddressesValue) {
+          cbObject.addresses = newAddressesValue;
+          logWalletConnect({
+            provider: new Web3HttpProvider(cbObject.defaultJsonRpcUrl),
+            type: 'coinbase',
+            wallet: cbObject.addresses.toLowerCase(),
+            walletProvider: 'coinbase'
+          });
+        }
       }
     }
   };
@@ -706,7 +772,7 @@ interface WCObject {
   handshakeId: number,
   handshakeTopic: string
 }
-function fetchWcObjet() {
+function fetchWcObject() {
   pfLog("PF >>> fetching wc object");
   const wc = localStorage.getItem('walletconnect');
   if (wc) {
@@ -715,6 +781,49 @@ function fetchWcObjet() {
     pfLog("PF >>> parsed wc object", wcObject);
   } else {
     pfLog("PF >>> failed to fetch wc object. Wc: ", wc);
+  }
+}
+
+
+interface CbObject {
+  sessionId: string,
+  sessionSecret: string,
+  addresses: string,
+  linked: string,
+  defaultChainId: string,
+  defaultJsonRpcUrl: string
+}
+function fetchCbObject(newAddressesValue?: string) {
+  pfLog("PF >>> fetching cb object");
+  const sessionId = localStorage.getItem("-walletlink:https://www.walletlink.org:session:id");
+  // const appVersion = localStorage.getItem("-walletlink:https://www.walletlink.org:AppVersion");
+  const linked = localStorage.getItem("-walletlink:https://www.walletlink.org:session:linked");
+  const defaultChainId = localStorage.getItem("-walletlink:https://www.walletlink.org:DefaultChainId");
+  const defaultJsonRpcUrl = localStorage.getItem("-walletlink:https://www.walletlink.org:DefaultJsonRpcUrl");
+  // const hasChainOverridenFromRelay = localStorage.getItem("-walletlink:https://www.walletlink.org:HasChainOverriddenFromRelay");
+  const sessionSecret = localStorage.getItem("-walletlink:https://www.walletlink.org:session:secret");
+  const addresses = newAddressesValue ?? localStorage.getItem("-walletlink:https://www.walletlink.org:Addresses");
+  // const walletUsername = localStorage.getItem("-walletlink:https://www.walletlink.org:walletUsername");
+  // const version = localStorage.getItem("-walletlink:https://www.walletlink.org:version");
+  pfLog("PF >>> cb:sessionId", sessionId);
+  pfLog("PF >>> cb:linked", linked);
+  pfLog("PF >>> cb:defaultChainId", defaultChainId);
+  pfLog("PF >>> cb:defaultJsonRpcUrl", defaultJsonRpcUrl);
+  pfLog("PF >>> cb:sessionSecret", sessionSecret);
+  pfLog("PF >>> cb:addresses", addresses);
+
+  if (sessionId && linked && linked === "1" && addresses && addresses.length > 0 && sessionSecret && defaultChainId && defaultJsonRpcUrl) {
+    cbObject = {
+      sessionId, sessionSecret, linked, addresses, defaultChainId, defaultJsonRpcUrl
+    }
+    pfLog("PF >>> parsed cb object", cbObject);
+  } else {
+    pfLog("PF >>> failed to fetch cb object. Cb: ", {
+      sessionId: sessionId,
+      linked: linked,
+      sessionSecret: sessionSecret,
+      addresses: addresses
+    });
   }
 }
 
@@ -736,6 +845,14 @@ async function fetchWallet(): Promise<WalletResponse[]> {
         type: p.type,
         wallet: wcObject.accounts[0].toLowerCase(),
         walletProvider: wcObject.peerMeta.name.toLowerCase(),
+        provider: p.provider
+      })
+    } else if(p.type === 'coinbase') {
+      if (!cbObject) continue;
+      result.push({
+        type: p.type,
+        wallet: cbObject.addresses.toLowerCase(),
+        walletProvider: p.type,
         provider: p.provider
       })
     } else {
@@ -898,25 +1015,29 @@ type ProviderName =
                 'infura'        |
                 'localhost'     |
                 'walletconnect' |
+                'rabby'         |
+                'frame'         |
                 'unknown';
 
 function getProviderNameForMetamask(): ProviderName {
   const fetchedProvider = (window as any).ethereum;
-  if (fetchedProvider.isMetaMask) return 'metamask';
   if (fetchedProvider.isTrust) return 'trust';
   if (fetchedProvider.isGoWallet) return 'gowallet';
   if (fetchedProvider.isAlphaWallet) return 'alphawallet';
   if (fetchedProvider.isStatus) return 'status';
-  if (fetchedProvider.isToshi) return 'coinbase';
+  if (fetchedProvider.isCoinbaseWallet) return 'coinbase';
+  if (fetchedProvider.isRabby) return 'rabby';
+  if (fetchedProvider.isFrame) return 'frame';
   if (typeof (window as any).__CIPHER__ !== 'undefined') return 'cipher';
   if (fetchedProvider.constructor.name === 'EthereumProvider') return 'mist';
   if (fetchedProvider.constructor.name === 'Web3FrameProvider') return 'parity';
   if (fetchedProvider.host && fetchedProvider.host.indexOf('infura') !== -1) return 'infura';
   if (fetchedProvider.host && fetchedProvider.host.indexOf('localhost') !== -1) return 'localhost';
+  if (fetchedProvider.isMetaMask) return 'metamask';
   return 'unknown';
 }
 
-type ProviderType = "injected" | "walletconnect"; // add more providers (dev3 widget, magic link, web3auth, ...)
+type ProviderType = "injected" | "walletconnect" | "coinbase"; // add more providers (dev3 widget, magic link, web3auth, ...)
 interface ProviderResult {
   type: ProviderType,
   provider: any
@@ -929,7 +1050,15 @@ async function getProvider(): Promise<ProviderResult[]> {
     pfLog("PF >>> Detected walletconnect provider...")
     providers.push({
       type: "walletconnect",
-      provider: await wcObjectToWeb3Provider(wcObject)
+      provider: await chainIdToWeb3Provider(wcObject.chainId)
+    });
+  }
+
+  if (cbObject) {
+    pfLog("PF >>> Detected coinbase provider...")
+    providers.push({
+      type: "coinbase",
+      provider: new Web3HttpProvider(cbObject.defaultJsonRpcUrl)
     });
   }
   
@@ -952,7 +1081,7 @@ async function getProvider(): Promise<ProviderResult[]> {
   return providers;
 }
 
-async function wcObjectToWeb3Provider(wcObject: WCObject): Promise<any> {
+async function chainIdToWeb3Provider(chainId: number): Promise<any> {
   pfLog("PF >> wc object to web3 provider")
   const rpcsMap = new Map<number, string>([
     [1, "https://eth.llamarpc.com"],
@@ -979,7 +1108,6 @@ async function wcObjectToWeb3Provider(wcObject: WCObject): Promise<any> {
     [11155111, "https://rpc.sepolia.dev"],
     [1313161554, "https://endpoints.omniatech.io/v1/aurora/mainnet/public"]
   ]);
-  const chainId = wcObject.chainId;
   const rpc = rpcsMap.get(chainId);
   if (!rpc) { return null; }
   const provider = new Web3HttpProvider(rpc);
