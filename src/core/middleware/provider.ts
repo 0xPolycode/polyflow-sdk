@@ -79,27 +79,25 @@ const CreateBlockchainErrorEvent = `
   }
 `
 
-let proxy: any;
-let provider = (window as any).ethereum;
-let gqlClient: AwesomeGraphQLClient;
-
 enum Environment {
   STAGING = "https://backend-staging.polyflow.dev/api/graphql",
   PROD = "https://backend-prod.polyflow.dev/api/graphql"
 }
+
+let proxy: any;
+let provider = (window as any).ethereum;
+let gqlClient: AwesomeGraphQLClient;
 let LOG_ENABLED: boolean = false;
-
-function pfLog(...args: any[]) { if (LOG_ENABLED) { console.log(...args); } }
-
 let wcObject: WCObject | null = null;
 let cbObject: CbObject | null = null;
+let chainlist: Map<string, string> = new Map();
 
 interface AttachOptions {
   logEnabled?: boolean,
   stagingModeEnabled?: boolean,
   gqlApi?: string
 }
-export function attach(apiKey: string, options?: AttachOptions) {
+export async function attach(apiKey: string, options?: AttachOptions) {
   let gqlApi: string = Environment.PROD;
   if (options) {
     if (options.gqlApi) {
@@ -120,6 +118,7 @@ export function attach(apiKey: string, options?: AttachOptions) {
 
   LOG_ENABLED = options ? (options.logEnabled === true) : false;
 
+  await fetchChainlist();
   storeUtmParams();
   fetchWcObject();
   fetchCbObject();
@@ -143,6 +142,15 @@ export function attach(apiKey: string, options?: AttachOptions) {
     }
   }
   return window.origin;
+}
+
+async function fetchChainlist() {
+  const chainlistResponse = await fetch(
+    'https://raw.githubusercontent.com/0xpolyflow/polyflow-sdk/master/resources/chainlist.json'
+  );
+  const chainlistJson = await chainlistResponse.json();
+  pfLog("PF >>> Fetched chainlist json", chainlistJson);
+  chainlist = new Map(Object.entries(chainlistJson));
 }
 
 const wsMessages = new Map<string, any>([]);
@@ -1082,34 +1090,13 @@ async function getProvider(): Promise<ProviderResult[]> {
 }
 
 async function chainIdToWeb3Provider(chainId: number): Promise<any> {
-  pfLog("PF >> wc object to web3 provider")
-  const rpcsMap = new Map<number, string>([
-    [1, "https://eth.llamarpc.com"],
-    [5, "https://endpoints.omniatech.io/v1/eth/goerli/public"],
-    [10, "https://endpoints.omniatech.io/v1/op/mainnet/public"],
-    [25, "https://cronos-evm.publicnode.com"],
-    [56, "https://bsc.publicnode.com"],
-    [100, "https://rpc.gnosischain.com"],
-    [137, "https://polygon.llamarpc.com"],
-    [250, "https://fantom.publicnode.com"],
-    [420, "https://goerli.optimism.io"],
-    [1284, "https://moonbeam.public.blastapi.io"],
-    [1285, "https://rpc.api.moonriver.moonbeam.network"],
-    [2222, "https://evm.kava.io"],
-    [4002, "https://rpc.testnet.fantom.network/"],
-    [7700, "https://canto.neobase.one"],
-    [8217, "https://public-node-api.klaytnapi.com/v1/cypress"],
-    [42161, "https://endpoints.omniatech.io/v1/arbitrum/one/public"],
-    [42170, "https://nova.arbitrum.io/rpc"],
-    [42220, "https://forno.celo.org"],
-    [43114, "https://avalanche-c-chain.publicnode.com"],
-    [80001, "https://endpoints.omniatech.io/v1/matic/mumbai/public"],
-    [421613, "https://goerli-rollup.arbitrum.io/rpc"],
-    [11155111, "https://rpc.sepolia.dev"],
-    [1313161554, "https://endpoints.omniatech.io/v1/aurora/mainnet/public"]
-  ]);
-  const rpc = rpcsMap.get(chainId);
-  if (!rpc) { return null; }
+  pfLog("PF >>> wc object to web3 provider")
+  const rpc = chainlist.get(chainId.toString());
+  if (!rpc) {
+    pfLog("PF >>> Missing rpc!")
+    return null;
+  }
+  pfLog("PF >>> Rpc: ", rpc);
   const provider = new Web3HttpProvider(rpc);
   return provider;
 }
@@ -1165,9 +1152,6 @@ function splitPathAndQuery(text?: string): PathAndQuery {
   else if (splitted.length === 1) { return { path: splitted[0] }; }
   else { return { path: splitted[0], query: splitted[1] }; }
 }
-// function removeQuery(text?: string) {
-// 	return (text ?? "").split("?")[0];
-// }
 
 function checkShouldLogEvent(event: any): boolean {
   const eventHash = hashEvent(event);
@@ -1217,3 +1201,5 @@ function hashEvent(event: any) {
   }
   return hash.toString();
 }
+
+function pfLog(...args: any[]) { if (LOG_ENABLED) { console.log(...args); } }
