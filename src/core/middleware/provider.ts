@@ -864,13 +864,21 @@ async function fetchWallet(): Promise<WalletResponse[]> {
         provider: p.provider
       })
     } else {
-      const accounts: string = await p.provider.request(
-        { method: 'eth_accounts' }
-      );
-      if (!accounts || accounts.length === 0) { continue; }
+      let accounts = [];
+      if (p.provider.hasOwnProperty('accounts')) { // if .accounts array already exists on provider (case for frame.sh wallet)
+        accounts = p.provider.accounts;
+      } else {                                     // if no .accounts exist, try to fetch from provider
+        accounts = await p.provider.request(
+          { method: 'eth_accounts' }
+        );
+      }
+      let wallet = "";
+      if (accounts && accounts.length > 0) {
+        wallet = accounts[0];
+      }
       result.push({
         type: p.type,
-        wallet: accounts[0].toLowerCase(),
+        wallet: wallet.toLowerCase(),
         walletProvider: getProviderNameForMetamask(),
         provider: p.provider
       });
@@ -894,6 +902,7 @@ interface ChainState {
 }
 async function getChainState(walletResult: WalletResponse): Promise<ChainState | null> {
   const provider = walletResult.provider;
+  if (!walletResult.wallet) { return null; }
 
   const getBalanceResponse = await provider.request(
     {
@@ -1005,8 +1014,8 @@ function getDeviceState(walletResult: WalletResponse | null): DeviceState {
       w: screen.width,
       h: screen.height
     },
-    walletType: walletResult?.type ?? 'unknown',
-    walletProvider: walletResult?.walletProvider ?? 'unknown'
+    walletType: walletResult?.type ?? 'none',
+    walletProvider: walletResult?.walletProvider ?? 'none'
   };
 }
 
@@ -1046,6 +1055,7 @@ function getProviderNameForMetamask(): ProviderName {
 }
 
 type ProviderType = "injected" | "walletconnect" | "coinbase"; // add more providers (dev3 widget, magic link, web3auth, ...)
+
 interface ProviderResult {
   type: ProviderType,
   provider: any
