@@ -1,6 +1,6 @@
 {
   "name": "@polyflow/sdk",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "Polyflow SDK",
   "main": "dist/browser/index.js",
   "type": "module",
