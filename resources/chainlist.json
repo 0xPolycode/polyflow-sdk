@@ -5,6 +5,7 @@
     "25": "https://cronos-evm.publicnode.com",
     "56": "https://bsc.publicnode.com",
     "100": "https://rpc.gnosischain.com",
+    "122": "https://rpc.fuse.io",
     "137": "https://polygon.llamarpc.com",
     "250": "https://fantom.publicnode.com",
     "420": "https://goerli.optimism.io",
