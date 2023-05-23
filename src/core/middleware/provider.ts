@@ -222,66 +222,71 @@ export function initializeWsProxy() {
     // outgoing messages
     const originalSend = ws.send
     const proxiedSend = function () {
-      pfLog("PF >>> Intercepted outgoing ws message", arguments);
-      const messageObj = JSON.parse(arguments[0]);
-      if (!messageObj) {
-        pfLog("PF >>> Could not parse ws message. Giving up on processing ws message: ", arguments[0]);
+      try {
+        pfLog("PF >>> Intercepted outgoing ws message", arguments);
+        const messageObj = JSON.parse(arguments[0]);
+        if (!messageObj) {
+          pfLog("PF >>> Could not parse ws message. Giving up on processing ws message: ", arguments[0]);
+          return originalSend.apply(this, arguments);
+        }
+        
+        pfLog("PF >>> Parsed ws message to object: ", messageObj);
+        if (messageObj.payload && messageObj.topic === wcObject?.peerId) {
+          pfLog("PF >>> Message is a walletconnect message");
+          if (!wcObject) {
+            pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
+            return originalSend.apply(this, arguments);
+          }
+          const payload = JSON.parse(messageObj.payload);
+          if (!payload) { 
+            pfLog("PF >>> Could not parse payload:", messageObj.payload);
+            return originalSend.apply(this, arguments);
+          }
+          pfLog("PF >>> Parsed payload: ", payload);
+          decrypt(payload, wcObject).then(decrypted => {
+            if (decrypted.id && decrypted.method && decrypted.method === 'eth_sendTransaction') {
+              pfLog("PF >>> Payload is eth_sendTransaction request with id: ", decrypted.id);
+              const params = decrypted.params[0];
+              pfLog("PF >>> Storing tx params object: ", params);
+              wsMessages.set(decrypted.id, params);
+            } else { pfLog("PF >>> Payload not eth_sendTransaction: ", decrypted); }
+          })
+        } else if(messageObj.type === 'PublishEvent' && messageObj.event === 'Web3Request' && messageObj.data) {
+          pfLog("PF >>> Message is a coinbase message");
+          if (!cbObject) {
+            pfLog("PF >>> Could not fetch coinbase object. Giving up on processing coinbase message: ", messageObj.data);
+            return originalSend.apply(this, arguments);;
+          }
+          aes256gcmDecrypt(messageObj.data, cbObject.sessionSecret).then(decryptedString => {
+            const decrypted = JSON.parse(decryptedString);
+            if (decrypted.id && decrypted.type === 'WEB3_REQUEST') {
+              pfLog("PF >>> Payload is a coinbase WEB3_REQUEST request with id: ", decrypted.id);
+              const requestObj = decrypted.request;
+              if (requestObj && requestObj.method === "signEthereumTransaction") {
+                pfLog("PF >>> Payload is a coinbase WEB3_REQUEST signEthereumTransaction with params: ", requestObj.params);
+                const params = requestObj.params;
+                pfLog("PF >>> Should submit tx: ", params.shouldSubmit);
+                if (params.shouldSubmit) {
+                  pfLog("PF >>> Storing tx params object");
+                  wsMessages.set(decrypted.id, {
+                    from: params.fromAddress,
+                    to: params.toAddress,
+                    data: params.data,
+                    value: params.weiValue,
+                    chainId: params.chainId
+                  });
+                }
+              }
+            } else { pfLog("PF >>> Payload not eth_sendTransaction: ", decrypted); }
+            pfLog("PF >>> Decrypted message: ", decrypted);
+          });
+        } else { pfLog("PF >>> Message is not a walletconnect message"); }
+  
+        return originalSend.apply(this, arguments);
+      } catch(error) {
+        pfLog("PF >>> Error handling websocked connection: ", error);
         return originalSend.apply(this, arguments);
       }
-      
-      pfLog("PF >>> Parsed ws message to object: ", messageObj);
-      if (messageObj.payload && messageObj.topic === wcObject?.peerId) {
-        pfLog("PF >>> Message is a walletconnect message");
-        if (!wcObject) {
-          pfLog("PF >>> Could not fetch wc object. Giving up on processing ws message: ", arguments[0]);
-          return originalSend.apply(this, arguments);
-        }
-        const payload = JSON.parse(messageObj.payload);
-        if (!payload) { 
-          pfLog("PF >>> Could not parse payload:", messageObj.payload);
-          return originalSend.apply(this, arguments);
-        }
-        pfLog("PF >>> Parsed payload: ", payload);
-        decrypt(payload, wcObject).then(decrypted => {
-          if (decrypted.id && decrypted.method && decrypted.method === 'eth_sendTransaction') {
-            pfLog("PF >>> Payload is eth_sendTransaction request with id: ", decrypted.id);
-            const params = decrypted.params[0];
-            pfLog("PF >>> Storing tx params object: ", params);
-            wsMessages.set(decrypted.id, params);
-          } else { pfLog("PF >>> Payload not eth_sendTransaction: ", decrypted); }
-        })
-      } else if(messageObj.type === 'PublishEvent' && messageObj.event === 'Web3Request' && messageObj.data) {
-        pfLog("PF >>> Message is a coinbase message");
-        if (!cbObject) {
-          pfLog("PF >>> Could not fetch coinbase object. Giving up on processing coinbase message: ", messageObj.data);
-          return originalSend.apply(this, arguments);;
-        }
-        aes256gcmDecrypt(messageObj.data, cbObject.sessionSecret).then(decryptedString => {
-          const decrypted = JSON.parse(decryptedString);
-          if (decrypted.id && decrypted.type === 'WEB3_REQUEST') {
-            pfLog("PF >>> Payload is a coinbase WEB3_REQUEST request with id: ", decrypted.id);
-            const requestObj = decrypted.request;
-            if (requestObj && requestObj.method === "signEthereumTransaction") {
-              pfLog("PF >>> Payload is a coinbase WEB3_REQUEST signEthereumTransaction with params: ", requestObj.params);
-              const params = requestObj.params;
-              pfLog("PF >>> Should submit tx: ", params.shouldSubmit);
-              if (params.shouldSubmit) {
-                pfLog("PF >>> Storing tx params object");
-                wsMessages.set(decrypted.id, {
-                  from: params.fromAddress,
-                  to: params.toAddress,
-                  data: params.data,
-                  value: params.weiValue,
-                  chainId: params.chainId
-                });
-              }
-            }
-          } else { pfLog("PF >>> Payload not eth_sendTransaction: ", decrypted); }
-          pfLog("PF >>> Decrypted message: ", decrypted);
-        });
-      } else { pfLog("PF >>> Message is not a walletconnect message"); }
-
-      return originalSend.apply(this, arguments);
     }
     ws.send = proxiedSend
     return ws;
