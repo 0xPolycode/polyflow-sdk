@@ -500,12 +500,15 @@ async function logErrors(errors: string[]) {
   if (walletsList.length === 0) {
     const chainState = {};
     const deviceState = getDeviceState(null);
+    let referrer = null;
+    if (document.referrer) { referrer = document.referrer; }
     let eventData = {
       tracker: {
         eventTracker: eventTracker,
         userId: userId,
         sessionId: sessionId,
         origin: location.hostname,
+        referrer: referrer,
         path: urlParts.path,
         query: urlParts.query,
         ...utmParams
@@ -521,12 +524,15 @@ async function logErrors(errors: string[]) {
       const walletResult = walletsList[i];
       let chainState = await getChainState(walletResult) ?? {};
       const deviceState = getDeviceState(walletResult);
+      let referrer = null;
+      if (document.referrer) { referrer = document.referrer; }
       let eventData = {
         tracker: {
           eventTracker: eventTracker,
           userId: userId,
           sessionId: sessionId,
           origin: location.hostname,
+          referrer: referrer,
           path: urlParts.path,
           query: urlParts.query,
           ...utmParams
@@ -564,12 +570,15 @@ async function logUserLanded(href: string | null = null) {
   if (walletsList.length === 0) {
     const chainState = {};
     const deviceState = getDeviceState(null);
+    let referrer = null;
+    if (document.referrer) { referrer = document.referrer; }
     let eventData = {
       tracker: {
         eventTracker: eventTracker,
         userId: userId,
         sessionId: sessionId,
         origin: location.hostname,
+        referrer: referrer,
         path: urlParts.path,
         query: urlParts.query,
         ...utmParams
@@ -584,12 +593,15 @@ async function logUserLanded(href: string | null = null) {
       const walletResult = walletsList[i];
       let chainState = await getChainState(walletResult) ?? {};;
       const deviceState = getDeviceState(walletResult);
+      let referrer = null;
+      if (document.referrer) { referrer = document.referrer; }
       let eventData = {
         tracker: {
           eventTracker: eventTracker,
           userId: userId,
           sessionId: sessionId,
           origin: location.hostname,
+          referrer: referrer,
           path: urlParts.path,
           query: urlParts.query,
           ...utmParams
@@ -627,12 +639,15 @@ async function logWalletConnect(walletResult: WalletResponse) {
   const deviceState = getDeviceState(walletResult);
   pfLog("PF >>> deviceState", deviceState);
   const urlParts = splitPathAndQuery(location.pathname);  
+  let referrer = null;
+  if (document.referrer) { referrer = document.referrer; }
   let eventData = {
     tracker: {
       eventTracker: eventTracker,
       userId: userId,
       sessionId: sessionId,
       origin: location.hostname,
+      referrer: referrer,
       path: urlParts.path,
       query: urlParts.query,
       ...utmParams
@@ -682,6 +697,8 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
   const utmParams = getUtmParams();
   const chainState = await getChainState(walletResult);
   const deviceState = getDeviceState(walletResult);
+  let referrer = null;
+  if (document.referrer) { referrer = document.referrer; }
   const txHash = result as string;
   const fetchedTxInfo: TxInfo = await walletResult.provider.request(
     { method: 'eth_getTransactionByHash', params: [ txHash ] }
@@ -696,6 +713,7 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
       userId: userId,
       sessionId: sessionId,
       origin: location.hostname,
+      referrer: referrer,
       path: urlParts.path,
       query: urlParts.query,
       ...utmParams
