@@ -34,7 +34,10 @@ type EventTracker = 'WALLET_CONNECT' | 'USER_LANDED' | 'TX_REQUEST' | 'GENERIC_E
 const CreateUserLandedEvent = `
   mutation CreateUserLandedEvent($event: UserLandedEventInput!) {
     createUserLandedEvent(event: $event) {
-      id
+      id,
+      tracker {
+        userId
+      }
     }
   }
 `
@@ -42,7 +45,10 @@ const CreateUserLandedEvent = `
 const CreateWalletConnectedEvent = `
   mutation CreateWalletConnectedEvent($event: WalletConnectedEventInput!) {
     createWalletConnectedEvent(event: $event) {
-      id
+      id,
+      tracker {
+        userId
+      }
     }
   }
 `
@@ -50,7 +56,10 @@ const CreateWalletConnectedEvent = `
 const CreateTxRequestEvent = `
   mutation CreateTxRequestEvent($event: TxRequestEventInput!) {
     createTxRequestEvent(event: $event) {
-      id
+      id,
+      tracker {
+        userId
+      }
     }
   }
 `
@@ -58,7 +67,10 @@ const CreateTxRequestEvent = `
 const UpdateTxRequestEventTxStatus = `
   mutation UpdateTxRequestEventTxStatus($id: UUID!, $newStatus: TxStatus!) {
     updateTxRequestEventTxStatus(id: $id, newStatus: $newStatus) {
-      id
+      id,
+      tracker {
+        userId
+      }
     }
   }
 `
@@ -66,7 +78,10 @@ const UpdateTxRequestEventTxStatus = `
 const CreateErrorEvent = `
   mutation CreateErrorEvent($event: ErrorEventInput!) {
     createErrorEvent(event: $event) {
-      id
+      id,
+      tracker {
+        userId
+      }
     }
   }
 `
@@ -184,16 +199,29 @@ export function initializeWsProxy() {
         const decrypted = await decrypt(payload, wcObject);
         if (decrypted.id && wsMessages.has(decrypted.id)) {
           pfLog("PF >>> Payload is a response to an eth_sendTransaction message");
-          const hash = decrypted.result;
-          pfLog("PF >>> Transaction hash: ", hash);
           const txData = wsMessages.get(decrypted.id);
           pfLog("PF >>> Transaction data: ", txData);
-          logSendTransaction(txData, hash, {
-            provider: await chainIdToWeb3Provider(wcObject.chainId),
-            type: 'walletconnect',
-            wallet: txData.from.toLowerCase(),
-            walletProvider: wcObject.peerMeta.name.toLowerCase()
-          });
+          if (decrypted.error) {
+            pfLog("PF >>> Transaction not sent! RPC error detected: ", decrypted.error);
+            if (decrypted.error.message && decrypted.error.message.includes("rejected")) {
+              pfLog("PF >>> Transaction was rejected by user!");
+              logSendTransaction(txData, TxStatus.CANCELLED, null, {
+                provider: await chainIdToWeb3Provider(wcObject.chainId),
+                type: 'walletconnect',
+                wallet: txData.from.toLowerCase(),
+                walletProvider: wcObject.peerMeta.name.toLowerCase()
+              });
+            }
+          } else {
+            const hash = decrypted.result;
+            pfLog("PF >>> Transaction hash: ", hash);
+            logSendTransaction(txData, TxStatus.PENDING, hash, {
+              provider: await chainIdToWeb3Provider(wcObject.chainId),
+              type: 'walletconnect',
+              wallet: txData.from.toLowerCase(),
+              walletProvider: wcObject.peerMeta.name.toLowerCase()
+            });
+          }
         } else { pfLog("PF >>> Payload is not a response to eth_sendTransaction message..."); }
       } else if (messageObj.type === "Event" && messageObj.event === "Web3Response" && messageObj.data) {
         pfLog("PF >>> Message is a coinbase message");
@@ -205,16 +233,29 @@ export function initializeWsProxy() {
         pfLog("PF >>> Decrypted coinbase message: ", decrypted);
         if (decrypted.id && wsMessages.has(decrypted.id)) {
           pfLog("PF >>> Payload is a response to an coinbase signEthereumTransaction message with broadcast=true");
-          const hash = decrypted.response.result;
-          pfLog("PF >>> Transaction hash: ", hash);
           const txData = wsMessages.get(decrypted.id);
           pfLog("PF >>> Transaction data: ", txData);
-          logSendTransaction(txData, hash, {
-            provider: await chainIdToWeb3Provider(txData.chainId),
-            type: "coinbase",
-            wallet: txData.from.toLowerCase(),
-            walletProvider: "coinbase"
-          })
+          if (decrypted.response.errorMessage) { // transaction not broadcasted (error)
+            pfLog("PF >>> Transaction not sent! RPC error detected: ", decrypted.response.errorMessage);
+            if (decrypted.response.errorMessage.includes("rejected")) {
+              pfLog("PF >>> Transaction was rejected by user!");
+              logSendTransaction(txData, TxStatus.CANCELLED, null, {
+                provider: await chainIdToWeb3Provider(txData.chainId),
+                type: "coinbase",
+                wallet: txData.from.toLowerCase(),
+                walletProvider: "coinbase"
+              });
+            }
+          } else {
+            const hash = decrypted.response.result;
+            pfLog("PF >>> Transaction hash: ", hash);
+            logSendTransaction(txData, TxStatus.PENDING, hash, {
+              provider: await chainIdToWeb3Provider(txData.chainId),
+              type: "coinbase",
+              wallet: txData.from.toLowerCase(),
+              walletProvider: "coinbase"
+            });
+          }
         }
       } else { pfLog("PF >>> Message not recognized!"); }
     })
@@ -351,26 +392,39 @@ const handler = {
       /* eslint-disable no-fallthrough */
       switch (method) {
         default: {
-          const result = await Reflect.get(target, prop, receiver)(...args);
-          pfLog("PF >>> Executed method on target object with result: ", result);
-          if (method === 'eth_requestAccounts') {
-            logWalletConnect({
-              provider: (window as any).ethereum,
-              type: 'injected',
-              wallet: result[0].toLowerCase(),
-              walletProvider: getProviderNameForMetamask()
-            });
-          } else if (method === 'eth_sendTransaction') {
-            logSendTransaction(params[0], result, {
-              provider: (window as any).ethereum,
-              type: 'injected',
-              wallet: params[0].from.toLowerCase(),
-              walletProvider: getProviderNameForMetamask()
-            });
-          } else  if (method === 'eth_sendSignedTransaction') {
-            pfLog("PF >>> DETECTED SEND SIGNED TRANSACTION MESSAGE");
+          try {
+            const result = await Reflect.get(target, prop, receiver)(...args);
+            pfLog("PF >>> Executed method on target object with result: ", result);
+            if (method === 'eth_requestAccounts') {
+              logWalletConnect({
+                provider: (window as any).ethereum,
+                type: 'injected',
+                wallet: result[0].toLowerCase(),
+                walletProvider: getProviderNameForMetamask()
+              });
+            } else if (method === 'eth_sendTransaction') {
+              logSendTransaction(params[0], TxStatus.PENDING, result, {
+                provider: (window as any).ethereum,
+                type: 'injected',
+                wallet: params[0].from.toLowerCase(),
+                walletProvider: getProviderNameForMetamask()
+              });
+            } else  if (method === 'eth_sendSignedTransaction') {
+              pfLog("PF >>> DETECTED SEND SIGNED TRANSACTION MESSAGE");
+            }
+            return result;
+          } catch(err: any) {
+            pfLog("PF >>> Error when sending transaction: ", err);
+            if (err.code && err.code == 4001) {
+              pfLog("PF >>> User rejected transaction!");
+              logSendTransaction(params[0], TxStatus.CANCELLED, null, {
+                provider: (window as any).ethereum,
+                type: 'injected',
+                wallet: params[0].from.toLowerCase(),
+                walletProvider: getProviderNameForMetamask()
+              });
+            }
           }
-          return result;
         }
       }
     };
@@ -553,6 +607,7 @@ async function logErrors(errors: string[]) {
         event: events[i]
       });
       pfLog("PF >>> Server notified. Response: ", response);
+      setUserId(response.createErrorEvent.tracker.userId);
     }
   }
 }
@@ -621,6 +676,7 @@ async function logUserLanded(href: string | null = null) {
         event: events[i]
       });
       pfLog("PF >>> Server notified. Response: ", response);
+      setUserId(response.createUserLandedEvent.tracker.userId);
     }
   }
 }
@@ -663,6 +719,7 @@ async function logWalletConnect(walletResult: WalletResponse) {
       event: eventData
     });
     pfLog("PF >>> Server notified. Response: ", response);
+    setUserId(response.createWalletConnectedEvent.tracker.userId);
   }
 }
 
@@ -687,7 +744,7 @@ interface TxInfo {
   s: string,
   hash: string
 }
-async function logSendTransaction(tx: Tx, result: any, walletResult: WalletResponse) {
+async function logSendTransaction(tx: Tx, txStatus: TxStatus, result: any, walletResult: WalletResponse) {
   pfLog("PF >>> Logging TX_REQUEST event.");
   pfLog("PF >>> Tx Data: ", tx);
   pfLog("PF >>> Tx Send Result: ", result);
@@ -699,13 +756,33 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
   const deviceState = getDeviceState(walletResult);
   let referrer = null;
   if (document.referrer) { referrer = document.referrer; }
-  const txHash = result as string;
-  const fetchedTxInfo: TxInfo = await walletResult.provider.request(
-    { method: 'eth_getTransactionByHash', params: [ txHash ] }
-  );
-  const maxFeePerGas = fetchedTxInfo.maxFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
-  const maxPriorityFeePerGas = 
-    fetchedTxInfo.maxPriorityFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
+
+  let txHash = null;
+  let maxFeePerGas = null;
+  let maxPriorityFeePerGas = null;
+  let nonce = null;
+  let gas = null;
+  let gasPrice = null;
+  let v = null;
+  let r = null;
+  let s = null;
+
+  if (result) { // tx hash exists
+    txHash = result as string;
+    const fetchedTxInfo: TxInfo = await walletResult.provider.request(
+      { method: 'eth_getTransactionByHash', params: [ txHash ] }
+    );
+    maxFeePerGas = fetchedTxInfo.maxFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
+    maxPriorityFeePerGas = 
+      fetchedTxInfo.maxPriorityFeePerGas ? BigNumber.from(fetchedTxInfo.maxFeePerGas).toString() : null;
+    nonce = BigNumber.from(fetchedTxInfo.nonce).toString();
+    gas = BigNumber.from(fetchedTxInfo.gas).toString();
+    gasPrice = BigNumber.from(fetchedTxInfo.gasPrice).toString();
+    v = fetchedTxInfo.v;
+    r = fetchedTxInfo.r;
+    s = fetchedTxInfo.s;
+  }
+
   const urlParts = splitPathAndQuery(location.pathname);
   let eventData = {
     tracker: {
@@ -721,20 +798,18 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
     device: deviceState,
     ...chainState,
     tx: {
-      from: fetchedTxInfo.from,
-      to: fetchedTxInfo.to,
-      value: BigNumber.from(fetchedTxInfo.value).toString(),
-      input: fetchedTxInfo.input,
-      nonce: BigNumber.from(fetchedTxInfo.nonce).toString(),
-      gas: BigNumber.from(fetchedTxInfo.gas).toString(),
-      gasPrice: BigNumber.from(fetchedTxInfo.gasPrice).toString(),
+      from: tx.from,
+      to: tx.to,
+      value: BigNumber.from(tx.value).toString(),
+      input: tx.data,
+      nonce: nonce,
+      gas: gas,
+      gasPrice: gasPrice,
       maxFeePerGas: maxFeePerGas,
       maxPriorityFeePerGas: maxPriorityFeePerGas,
-      v: fetchedTxInfo.v,
-      r: fetchedTxInfo.r,
-      s: fetchedTxInfo.s,
+      v: v, r: r, s: s,
       hash: txHash,
-      status: TxStatus.PENDING
+      status: txStatus
     }
   }
   pfLog("PF >>> Built TX_REQUEST event", eventData);
@@ -744,16 +819,21 @@ async function logSendTransaction(tx: Tx, result: any, walletResult: WalletRespo
       event: eventData
     });
     pfLog("PF >>> Server notified. Response: ", response);
+    setUserId(response.createTxRequestEvent.tracker.userId);
     
-    const receipt = await waitMined(eventData, walletResult.provider);
-    pfLog("PF >>> receipt: ", receipt);
-    if (receipt) {
-      pfLog("PF >>> Notifying gql server about transaction status update...");
-      const updateResponse = await gqlClient.request(UpdateTxRequestEventTxStatus, {
-        id: response.createTxRequestEvent.id,
-        newStatus: receipt.status
-      });
-      pfLog("PF >>> Server notified about transaction status update. Response: ", updateResponse);
+    // if pending, wait for result
+    if (txStatus == TxStatus.PENDING) {
+      const receipt = await waitMined(eventData, walletResult.provider);
+      pfLog("PF >>> receipt: ", receipt);
+      if (receipt) {
+        pfLog("PF >>> Notifying gql server about transaction status update...");
+        const updateResponse = await gqlClient.request(UpdateTxRequestEventTxStatus, {
+          id: response.createTxRequestEvent.id,
+          newStatus: receipt.status
+        });
+        pfLog("PF >>> Server notified about transaction status update. Response: ", updateResponse);
+        setUserId(updateResponse.updateTxRequestEventTxStatus.tracker.userId);
+      }
     }    
   }
 }
@@ -767,6 +847,10 @@ function getUserId(): string {
     localStorage.setItem(PF_SDK_USER_KEY, userId);
     return userId;
   }
+}
+
+function setUserId(userId: string) {
+  localStorage.setItem(PF_SDK_USER_KEY, userId);
 }
 
 function getSessionId(): string {
@@ -1137,7 +1221,8 @@ async function chainIdToWeb3Provider(chainId: number): Promise<any> {
 enum TxStatus {
   PENDING = "PENDING",
   SUCCESS = "SUCCESS",
-  FAILURE = "FAILURE"
+  FAILURE = "FAILURE",
+  CANCELLED = "CANCELLED"
 }
 interface TxReceipt {
   blockNumber: string,
