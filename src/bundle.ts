@@ -1,9 +1,9 @@
 import { attach, initializeWsProxy } from './core/middleware/provider';
 
-window.addEventListener("DOMContentLoaded", () => {
-    initializeWsProxy();
+window.addEventListener('DOMContentLoaded', () => {
+  initializeWsProxy();
 });
 
-window.addEventListener("load", () => {
-    attach("{{API_KEY}}");
+window.addEventListener('load', () => {
+  attach('{{API_KEY}}');
 });
