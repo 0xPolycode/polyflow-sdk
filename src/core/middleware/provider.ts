@@ -871,11 +871,15 @@ async function logUserLanded(href: string | null = null) {
 }
 
 async function logSdkError(err: any) {
-  const errString = JSON.stringify(err);
-  pfLog('PF >>> Logging SDK error: ', errString);
-  const response = await gqlClient.request(CreateSdkErrorEvent, err);
-  pfLog('PF >>> Server notified. Response: ', response);
-  setUserId(response.createSdkErrorEvent.tracker.userId);
+  try {
+    const errString = JSON.stringify(err);
+    pfLog('PF >>> Logging SDK error: ', errString);
+    const response = await gqlClient.request(CreateSdkErrorEvent, err);
+    pfLog('PF >>> Server notified. Response: ', response);
+    setUserId(response.createSdkErrorEvent.tracker.userId);
+  } catch (err) {
+    pfLog('PF >>> Error while logging SDK error event', err);
+  }
 }
 
 async function logWalletConnect(walletResult: WalletResponse) {
