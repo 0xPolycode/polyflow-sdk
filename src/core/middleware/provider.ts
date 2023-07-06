@@ -7,7 +7,8 @@ import HttpProvider from 'web3-providers-http';
 import { JsonRpcResponse } from 'web3-core-helpers';
 import uaParser from 'ua-parser-js';
 import { aes256gcmDecrypt } from '../util/aes256gcm';
-import { LIB_VERSION } from '../../version';
+
+const LIB_VERSION = "1.0.25";
 
 class Web3HttpProvider extends HttpProvider {
   async request(payload: any): Promise<JsonRpcResponse | null> {
