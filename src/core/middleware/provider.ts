@@ -7,6 +7,7 @@ import HttpProvider from 'web3-providers-http';
 import { JsonRpcResponse } from 'web3-core-helpers';
 import uaParser from 'ua-parser-js';
 import { aes256gcmDecrypt } from '../util/aes256gcm';
+import { LIB_VERSION } from '../../version';
 
 class Web3HttpProvider extends HttpProvider {
   async request(payload: any): Promise<JsonRpcResponse | null> {
@@ -34,11 +35,15 @@ const PF_SDK_UTM_KEY = 'PF_SDK_UTM_KEY';
 const PF_EVENTS_HASH_MAP = 'PF_EVENTS_HASH_MAP';
 const MIN_TIME_DIFF_FOR_EVENT_LOG_MS = 1000;
 
+const SDK_ERR_TRACKER: EventTracker = "SDK_ERROR";
+
+
 type EventTracker =
   | 'WALLET_CONNECT'
   | 'USER_LANDED'
   | 'TX_REQUEST'
-  | 'GENERIC_ERROR';
+  | 'GENERIC_ERROR'
+  | 'SDK_ERROR';
 
 const CreateUserLandedEvent = `
   mutation CreateUserLandedEvent($event: UserLandedEventInput!) {
@@ -94,6 +99,17 @@ const CreateErrorEvent = `
     }
   }
 `;
+
+const CreateSdkErrorEvent = `
+  mutation CreateSdkErrorEvent($event: SdkErrorEventInput!) {
+    createSdkErrorEvent(event: $event) {
+      id,
+      tracker {
+        userId
+      }
+    }
+  }
+`
 
 const CreateBlockchainErrorEvent = `
   mutation CreateBlockchainErrorEvent($event: BlockchainErrorEventInput!) {
@@ -662,11 +678,11 @@ async function errorHandler(
 }
 
 async function logErrors(errors: string[]) {
+  pfLog('PF >>> Logging GENERIC_ERROR event');
+  const eventTracker: EventTracker = 'GENERIC_ERROR';
+  const userId = getUserId();
+  const sessionId = getSessionId();
   try {
-    pfLog('PF >>> Logging GENERIC_ERROR event');
-    const eventTracker: EventTracker = 'GENERIC_ERROR';
-    const userId = getUserId();
-    const sessionId = getSessionId();
     const utmParams = getUtmParams();
     const walletsList = await fetchWallet();
     const urlParts = splitPathAndQuery(location.pathname);
@@ -689,6 +705,7 @@ async function logErrors(errors: string[]) {
           referrer: referrer,
           path: urlParts.path,
           query: urlParts.query,
+          sdkVersion: LIB_VERSION,
           ...utmParams,
         },
         device: deviceState,
@@ -716,6 +733,7 @@ async function logErrors(errors: string[]) {
             referrer: referrer,
             path: urlParts.path,
             query: urlParts.query,
+            sdkVersion: LIB_VERSION,
             ...utmParams,
           },
           device: deviceState,
@@ -738,16 +756,30 @@ async function logErrors(errors: string[]) {
       }
     }
   } catch(err) {
-    pfLog('PF >>> GENERIC_ERROR err', err);
+    let metadata = {
+      eventTracker: eventTracker,
+      errors: errors.join(";"),
+      exception: JSON.stringify(err)
+    };
+    const errData = {
+      tracker: {
+        eventTracker: SDK_ERR_TRACKER,
+        userId: userId,
+        sessionId: sessionId,
+        sdkVersion: LIB_VERSION
+      },
+      metadata: JSON.stringify(metadata)
+    };
+    logSdkError(errData);
   }
 }
 
 async function logUserLanded(href: string | null = null) {
+  pfLog('PF >>> Logging USER_LANDED event');
+  const eventTracker: EventTracker = 'USER_LANDED';
+  const userId = getUserId();
+  const sessionId = getSessionId();
   try {
-    pfLog('PF >>> Logging USER_LANDED event');
-    const eventTracker: EventTracker = 'USER_LANDED';
-    const userId = getUserId();
-    const sessionId = getSessionId();
     const utmParams = getUtmParams();
     const urlParts = splitPathAndQuery(
       href ?? location.pathname + location.search
@@ -772,6 +804,7 @@ async function logUserLanded(href: string | null = null) {
           referrer: referrer,
           path: urlParts.path,
           query: urlParts.query,
+          sdkVersion: LIB_VERSION,
           ...utmParams,
         },
         device: deviceState,
@@ -798,6 +831,7 @@ async function logUserLanded(href: string | null = null) {
             referrer: referrer,
             path: urlParts.path,
             query: urlParts.query,
+            sdkVersion: LIB_VERSION,
             ...utmParams,
           },
           device: deviceState,
@@ -819,21 +853,42 @@ async function logUserLanded(href: string | null = null) {
       }
     }
   } catch(err) {
-    pfLog('PF >>> USER_LANDED err', err);
+    let metadata = {
+      eventTracker: eventTracker,
+      exception: JSON.stringify(err)
+    };
+    const errData = {
+      tracker: {
+        eventTracker: SDK_ERR_TRACKER,
+        userId: userId,
+        sessionId: sessionId,
+        sdkVersion: LIB_VERSION
+      },
+      metadata: JSON.stringify(metadata)
+    };
+    logSdkError(errData);
   }
 }
 
+async function logSdkError(err: any) {
+  const errString = JSON.stringify(err);
+  pfLog('PF >>> Logging SDK error: ', errString);
+  const response = await gqlClient.request(CreateSdkErrorEvent, err);
+  pfLog('PF >>> Server notified. Response: ', response);
+  setUserId(response.createSdkErrorEvent.tracker.userId);
+}
+
 async function logWalletConnect(walletResult: WalletResponse) {
+  pfLog(
+    'PF >>> Logging WALLET_CONNECT event for wallet response',
+    walletResult
+  );
+  const eventTracker: EventTracker = 'WALLET_CONNECT';
+  const userId = getUserId();
+  pfLog('PF >>> userId', userId);
+  const sessionId = getSessionId();
+  pfLog('PF >>> sessionId', sessionId);
   try {
-    pfLog(
-      'PF >>> Logging WALLET_CONNECT event for wallet response',
-      walletResult
-    );
-    const eventTracker: EventTracker = 'WALLET_CONNECT';
-    const userId = getUserId();
-    pfLog('PF >>> userId', userId);
-    const sessionId = getSessionId();
-    pfLog('PF >>> sessionId', sessionId);
     const utmParams = getUtmParams();
     pfLog('PF >>> utmParams', utmParams);
     const chainState = await getChainState(walletResult);
@@ -855,6 +910,7 @@ async function logWalletConnect(walletResult: WalletResponse) {
         referrer: referrer,
         path: urlParts.path,
         query: urlParts.query,
+        sdkVersion: LIB_VERSION,
         ...utmParams,
       },
       device: deviceState,
@@ -871,7 +927,21 @@ async function logWalletConnect(walletResult: WalletResponse) {
       setUserId(response.createWalletConnectedEvent.tracker.userId);
     }
   } catch(err) {
-    pfLog('PF >>> WALLET_CONNECT err', err);
+    let metadata = {
+      eventTracker: eventTracker,
+      walletResult: JSON.stringify(walletResult),
+      exception: JSON.stringify(err)
+    };
+    const errData = {
+      tracker: {
+        eventTracker: SDK_ERR_TRACKER,
+        userId: userId,
+        sessionId: sessionId,
+        sdkVersion: LIB_VERSION
+      },
+      metadata: JSON.stringify(metadata)
+    };
+    logSdkError(errData);
   }
 }
 
@@ -902,13 +972,13 @@ async function logSendTransaction(
   result: any,
   walletResult: WalletResponse
 ) {
+  pfLog('PF >>> Logging TX_REQUEST event.');
+  pfLog('PF >>> Tx Data: ', tx);
+  pfLog('PF >>> Tx Send Result: ', result);
+  const eventTracker: EventTracker = 'TX_REQUEST';
+  const userId = getUserId();
+  const sessionId = getSessionId();
   try {
-    pfLog('PF >>> Logging TX_REQUEST event.');
-    pfLog('PF >>> Tx Data: ', tx);
-    pfLog('PF >>> Tx Send Result: ', result);
-    const eventTracker: EventTracker = 'TX_REQUEST';
-    const userId = getUserId();
-    const sessionId = getSessionId();
     const utmParams = getUtmParams();
     const chainState = await getChainState(walletResult);
     const deviceState = getDeviceState(walletResult);
@@ -959,6 +1029,7 @@ async function logSendTransaction(
         referrer: referrer,
         path: urlParts.path,
         query: urlParts.query,
+        sdkVersion: LIB_VERSION,
         ...utmParams,
       },
       device: deviceState,
@@ -1011,6 +1082,24 @@ async function logSendTransaction(
       }
     }
   } catch(err) {
+    let metadata = {
+      eventTracker: eventTracker,
+      tx: JSON.stringify(tx),
+      txStatus: JSON.stringify(txStatus),
+      result: JSON.stringify(result),
+      walletResult: JSON.stringify(walletResult),
+      exception: JSON.stringify(err)
+    };
+    const errData = {
+      tracker: {
+        eventTracker: SDK_ERR_TRACKER,
+        userId: userId,
+        sessionId: sessionId,
+        sdkVersion: LIB_VERSION
+      },
+      metadata: JSON.stringify(metadata)
+    };
+    logSdkError(errData);
     pfLog('PF >>> TX_REQUEST err', err);
   }
 }
