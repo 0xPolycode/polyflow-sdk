@@ -21,6 +21,6 @@
     "43114": "https://avalanche-c-chain.publicnode.com",
     "80001": "https://endpoints.omniatech.io/v1/matic/mumbai/public",
     "421613": "https://goerli-rollup.arbitrum.io/rpc",
-    "11155111": "https://rpc.sepolia.dev",
+    "11155111": "https://rpc.notadegen.com/eth/sepolia",
     "1313161554": "https://endpoints.omniatech.io/v1/aurora/mainnet/public"
 }
