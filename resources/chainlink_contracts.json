@@ -33,7 +33,8 @@
     },
     "43113":  {
         "vrf_coordinator_contract": "0x2eD832Ba664535e5886b75D64C46EB9a228C2610",
-        "link_token_contract": "0x0b9d5D9136855f6FEc3c0993feE6E9CE8a297846"
+        "link_token_contract": "0x0b9d5D9136855f6FEc3c0993feE6E9CE8a297846",
+        "functions_oracle_registry": "0x452C33Cef9Bc773267Ac5F8D85c1Aca2bA4bcf0C"
     },
     "43114":  {
         "vrf_coordinator_contract": "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634",
@@ -41,7 +42,8 @@
     },
     "80001":  {
         "vrf_coordinator_contract": "0x7a1BaC17Ccc5b313516C5E16fb24f7659aA5ebed",
-        "link_token_contract": "0x326C977E6efc84E512bB9C30f76E30c160eD06FB"
+        "link_token_contract": "0x326C977E6efc84E512bB9C30f76E30c160eD06FB",
+        "functions_oracle_registry": "0xEe9Bf52E5Ea228404bB54BCFbbDa8c21131b9039"
     },
     "421613":  {
         "vrf_coordinator_contract": "0x674Cda1Fef7b3aA28c535693D658B42424bb7dBD",
@@ -49,6 +51,7 @@
     },
     "11155111":  {
         "vrf_coordinator_contract": "0x8103b0a8a00be2ddc778e6e7eaa21791cd364625",
-        "link_token_contract": "0x779877A7B0D9E8603169DdbD7836e478b4624789"
+        "link_token_contract": "0x779877A7B0D9E8603169DdbD7836e478b4624789",
+        "functions_oracle_registry": "0x3c79f56407DCB9dc9b852D139a317246f43750Cc"
     }
 }
