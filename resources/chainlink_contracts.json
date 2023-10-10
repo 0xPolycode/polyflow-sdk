@@ -1,57 +1,91 @@
 {
     "1": {
         "vrf_coordinator_contract": "0x271682DEB8C4E0901D1a1550aD2e64D568E69909",
-        "link_token_contract": "0x514910771AF9Ca656af840dff83E8264EcF986CA"
+        "link_token_contract": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+        "keeper_registry_contract": "0x02777053d6764996e594c3E88AF1D58D5363a2e6",
+        "keeper_registrar_contract": "0xDb8e8e2ccb5C033938736aa89Fe4fa1eDfD15a1d"
     },
     "5": {
         "vrf_coordinator_contract": "0x2Ca8E0C643bDe4C2E08ab1fA0da3401AdAD7734D",
-        "link_token_contract": "0x326C977E6efc84E512bB9C30f76E30c160eD06FB"
+        "link_token_contract": "0x326C977E6efc84E512bB9C30f76E30c160eD06FB",
+        "keeper_registry_contract": "0xE16Df59B887e3Caa439E0b29B42bA2e7976FD8b2",
+        "keeper_registrar_contract": "0x57A4a13b35d25EE78e084168aBaC5ad360252467"
+    },
+    "10": {
+        "keeper_registry_contract": "0x75c0530885F385721fddA23C539AF3701d6183D4",
+        "keeper_registrar_contract": "0x4F3AF332A30973106Fe146Af0B4220bBBeA748eC"
     },
     "56":  {
         "vrf_coordinator_contract": "0xc587d9053cd1118f25F645F9E08BB98c9712A4EE",
-        "link_token_contract": "0x404460C6A5EdE2D891e8297795264fDe62ADBB75"
+        "link_token_contract": "0x404460C6A5EdE2D891e8297795264fDe62ADBB75",
+        "keeper_registry_contract": "0x02777053d6764996e594c3E88AF1D58D5363a2e6",
+        "keeper_registrar_contract": "0xDb8e8e2ccb5C033938736aa89Fe4fa1eDfD15a1d"
     },
     "97":  {
         "vrf_coordinator_contract": "0x6A2AAd07396B36Fe02a22b33cf443582f682c82f",
-        "link_token_contract": "0x84b9B910527Ad5C03A9Ca831909E21e236EA7b06"
+        "link_token_contract": "0x84b9B910527Ad5C03A9Ca831909E21e236EA7b06",
+        "keeper_registry_contract": "0xE16Df59B887e3Caa439E0b29B42bA2e7976FD8b2",
+        "keeper_registrar_contract": "0x57A4a13b35d25EE78e084168aBaC5ad360252467"
     },
     "137":  {
         "vrf_coordinator_contract": "0xAE975071Be8F8eE67addBC1A82488F1C24858067",
-        "link_token_contract": "0xb0897686c545045aFc77CF20eC7A532E3120E0F1"
+        "link_token_contract": "0xb0897686c545045aFc77CF20eC7A532E3120E0F1",
+        "keeper_registry_contract": "0x02777053d6764996e594c3E88AF1D58D5363a2e6",
+        "keeper_registrar_contract": "0xDb8e8e2ccb5C033938736aa89Fe4fa1eDfD15a1d"
     },
     "250":  {
         "vrf_coordinator_contract": "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634",
-        "link_token_contract": "0x6F43FF82CCA38001B6699a8AC47A2d0E66939407"
+        "link_token_contract": "0x6F43FF82CCA38001B6699a8AC47A2d0E66939407",
+        "keeper_registry_contract": "0x02777053d6764996e594c3E88AF1D58D5363a2e6",
+        "keeper_registrar_contract": "0xDb8e8e2ccb5C033938736aa89Fe4fa1eDfD15a1d"
+    },
+    "420": {
+        "keeper_registry_contract": "0x758F940D28ca0F7F20e08A4AB21dfC9C66b83549",
+        "keeper_registrar_contract": "0x4F3AF332A30973106Fe146Af0B4220bBBeA748eC"
     },
     "4002":  {
         "vrf_coordinator_contract": "0xbd13f08b8352A3635218ab9418E340c60d6Eb418",
-        "link_token_contract": "0xfaFedb041c0DD4fA2Dc0d87a6B0979Ee6FA7af5F"
+        "link_token_contract": "0xfaFedb041c0DD4fA2Dc0d87a6B0979Ee6FA7af5F",
+        "keeper_registry_contract": "0xE16Df59B887e3Caa439E0b29B42bA2e7976FD8b2",
+        "keeper_registrar_contract": "0x57A4a13b35d25EE78e084168aBaC5ad360252467"
     },
     "42161":  {
         "vrf_coordinator_contract": "0x2D159AE3bFf04a10A355B608D22BDEC092e934fa",
-        "link_token_contract": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
+        "link_token_contract": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
+        "keeper_registry_contract": "0x75c0530885F385721fddA23C539AF3701d6183D4",
+        "keeper_registrar_contract": "0x4F3AF332A30973106Fe146Af0B4220bBBeA748eC"
     },
     "43113":  {
         "vrf_coordinator_contract": "0x2eD832Ba664535e5886b75D64C46EB9a228C2610",
         "link_token_contract": "0x0b9d5D9136855f6FEc3c0993feE6E9CE8a297846",
-        "functions_oracle_registry": "0x452C33Cef9Bc773267Ac5F8D85c1Aca2bA4bcf0C"
+        "functions_oracle_registry": "0x452C33Cef9Bc773267Ac5F8D85c1Aca2bA4bcf0C",
+        "keeper_registry_contract": "0xE16Df59B887e3Caa439E0b29B42bA2e7976FD8b2",
+        "keeper_registrar_contract": "0x57A4a13b35d25EE78e084168aBaC5ad360252467"
     },
     "43114":  {
         "vrf_coordinator_contract": "0xd5D517aBE5cF79B7e95eC98dB0f0277788aFF634",
-        "link_token_contract": "0x5947BB275c521040051D82396192181b413227A3"
+        "link_token_contract": "0x5947BB275c521040051D82396192181b413227A3",
+        "keeper_registry_contract": "0x02777053d6764996e594c3E88AF1D58D5363a2e6",
+        "keeper_registrar_contract": "0xDb8e8e2ccb5C033938736aa89Fe4fa1eDfD15a1d"
     },
     "80001":  {
         "vrf_coordinator_contract": "0x7a1BaC17Ccc5b313516C5E16fb24f7659aA5ebed",
         "link_token_contract": "0x326C977E6efc84E512bB9C30f76E30c160eD06FB",
-        "functions_oracle_registry": "0xEe9Bf52E5Ea228404bB54BCFbbDa8c21131b9039"
+        "functions_oracle_registry": "0xEe9Bf52E5Ea228404bB54BCFbbDa8c21131b9039",
+        "keeper_registry_contract": "0xE16Df59B887e3Caa439E0b29B42bA2e7976FD8b2",
+        "keeper_registrar_contract": "0x57A4a13b35d25EE78e084168aBaC5ad360252467"
     },
     "421613":  {
         "vrf_coordinator_contract": "0x674Cda1Fef7b3aA28c535693D658B42424bb7dBD",
-        "link_token_contract": "0xd14838A68E8AFBAdE5efb411d5871ea0011AFd28"
+        "link_token_contract": "0xd14838A68E8AFBAdE5efb411d5871ea0011AFd28",
+        "keeper_registry_contract": "0x291093864bafc9aA517eF90ce954dD7D95D68C80",
+        "keeper_registrar_contract": "0x263ae9E522707D5A2B317026358d7f33ceC4ccc5"
     },
     "11155111":  {
         "vrf_coordinator_contract": "0x8103b0a8a00be2ddc778e6e7eaa21791cd364625",
         "link_token_contract": "0x779877A7B0D9E8603169DdbD7836e478b4624789",
-        "functions_oracle_registry": "0x3c79f56407DCB9dc9b852D139a317246f43750Cc"
+        "functions_oracle_registry": "0x3c79f56407DCB9dc9b852D139a317246f43750Cc",
+        "keeper_registry_contract": "0xE16Df59B887e3Caa439E0b29B42bA2e7976FD8b2",
+        "keeper_registrar_contract": "0x9a811502d843E5a03913d5A2cfb646c11463467A"
     }
 }
